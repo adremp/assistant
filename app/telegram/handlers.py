@@ -281,7 +281,7 @@ async def handle_text_message(
 
     # Check if this is an OAuth code (starts with 4/)
     if text.startswith("4/"):
-        await handle_oauth_code(message, text, token_storage)
+        await handle_oauth_code(message, text, token_storage, llm_client)
         return
 
     # Show typing indicator
@@ -347,6 +347,7 @@ async def handle_oauth_code(
     message: Message,
     code: str,
     token_storage: TokenStorage,
+    llm_client: LLMClient,
 ) -> None:
     """
     Handle OAuth authorization code.
@@ -355,6 +356,7 @@ async def handle_oauth_code(
         message: Telegram message
         code: OAuth authorization code
         token_storage: Token storage
+        llm_client: LLM client for clearing history
     """
     from app.google.auth import GoogleAuthService
     from app.config import get_settings
@@ -367,6 +369,9 @@ async def handle_oauth_code(
         success = await auth_service.handle_callback(user_id, code)
         
         if success:
+            # Clear chat history after successful auth
+            await llm_client.clear_history(user_id)
+            
             await message.answer(
                 "✅ Авторизация успешна!\n\n"
                 "Теперь я могу работать с вашим календарём и задачами.\n"

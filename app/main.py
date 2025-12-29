@@ -58,6 +58,11 @@ async def lifespan(app: FastAPI):
     )
     logger.info(f"LLM client initialized (model: {settings.llm_model})")
 
+    # Initialize summarization worker
+    from app.llm.summarization_worker import SummarizationWorker
+    summarization_worker = SummarizationWorker(redis, llm_client)
+    await summarization_worker.start()
+
     # Initialize Telegram bot
     bot = await create_bot(settings)
     dp = create_dispatcher()
@@ -73,6 +78,7 @@ async def lifespan(app: FastAPI):
     app.state.bot = bot
     app.state.dp = dp
     app.state.llm_client = llm_client
+    app.state.summarization_worker = summarization_worker
 
     logger.info("Application started successfully")
 
@@ -85,6 +91,9 @@ async def lifespan(app: FastAPI):
 
     # Cleanup
     logger.info("Shutting down application...")
+    
+    # Stop summarization worker
+    await summarization_worker.stop()
     
     polling_task.cancel()
     try:

@@ -95,6 +95,7 @@ class LLMClient:
             now_str = now.strftime("%Y-%m-%d %H:%M:%S %z")
             message = f"[Текущее время: {now_str}, часовой пояс: {tz_formatted}]\n\n{message}"
 
+        # Background worker handles TTL-based summarization via Redis keyspace notifications
         # Get conversation history
         history = await self.history.get(user_id)
 
@@ -194,14 +195,6 @@ class LLMClient:
                 ],
             }
             history.append(assistant_message_full)
-            
-            # Compact message for Redis (save tokens)
-            tool_names = [tc.function.name for tc in message.tool_calls]
-            assistant_message_compact = {
-                "role": "assistant",
-                "content": f"[Использованы инструменты: {', '.join(tool_names)}]",
-            }
-            await self.history.append(user_id, assistant_message_compact)
 
             # Execute each tool call
             for tool_call in message.tool_calls:
@@ -223,7 +216,7 @@ class LLMClient:
                     # Special handling for respond_to_user tool
                     if tool_name == "respond_to_user" and result.get("type") == "user_response":
                         user_response = result.get("response", "")
-                        # Save to history and return directly
+                        # Save only the actual response to history (no "[Использованы инструменты]" prefix)
                         await self.history.append(user_id, {"role": "assistant", "content": user_response})
                         return user_response
                     
@@ -270,3 +263,4 @@ class LLMClient:
         """
         await self.history.clear(user_id)
         logger.info(f"Cleared conversation history for user {user_id}")
+
