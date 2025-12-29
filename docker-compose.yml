@@ -1,0 +1,57 @@
+services:
+  app:
+    image: ${DOCKER_IMAGE:-assistant:latest}
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: assistant-app
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    environment:
+      - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN}
+      - TELEGRAM_WEBHOOK_URL=${TELEGRAM_WEBHOOK_URL}
+      - TELEGRAM_WEBHOOK_SECRET=${TELEGRAM_WEBHOOK_SECRET}
+      - GOOGLE_CREDENTIALS_PATH=/app/credentials.json
+      - LLM_API_KEY=${LLM_API_KEY}
+      - LLM_BASE_URL=${LLM_BASE_URL:-https://api.x.ai/v1}
+      - LLM_MODEL=${LLM_MODEL:-grok-3}
+      - LLM_TEMPERATURE=${LLM_TEMPERATURE:-0.7}
+      - REDIS_URL=redis://redis:6379/0
+      - CONVERSATION_TTL_SECONDS=${CONVERSATION_TTL_SECONDS:-86400}
+      - TOKEN_TTL_SECONDS=${TOKEN_TTL_SECONDS:-2592000}
+    volumes:
+      - ./credentials.json:/app/credentials.json:ro
+    depends_on:
+      redis:
+        condition: service_healthy
+    networks:
+      - assistant-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+
+  redis:
+    image: redis:7-alpine
+    container_name: assistant-redis
+    restart: unless-stopped
+    volumes:
+      - redis-data:/data
+    command: redis-server --appendonly yes
+    networks:
+      - assistant-network
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+networks:
+  assistant-network:
+    driver: bridge
+
+volumes:
+  redis-data:
