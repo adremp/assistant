@@ -343,6 +343,85 @@ async def _get_llm_response_with_rate_limit_handling(
     raise Exception("Не удалось получить ответ")
 
 
+@router.message(F.voice)
+async def handle_voice_message(
+    message: Message,
+    llm_client: LLMClient,
+) -> None:
+    """
+    Handle voice messages - transcribe and send to LLM.
+
+    Args:
+        message: Telegram message with voice
+        llm_client: LLM client from workflow_data
+    """
+    from app.llm.transcription import TranscriptionService
+    from app.config import get_settings
+    
+    user_id = message.from_user.id if message.from_user else 0
+    voice = message.voice
+    
+    if not voice or not message.bot:
+        return
+
+    # Show typing indicator
+    await message.bot.send_chat_action(message.chat.id, "typing")
+
+    try:
+        # Download voice file
+        file = await message.bot.get_file(voice.file_id)
+        if not file.file_path:
+            await message.answer("⚠️ Не удалось получить аудио файл.")
+            return
+        
+        # Download file content
+        file_bytes = await message.bot.download_file(file.file_path)
+        if not file_bytes:
+            await message.answer("⚠️ Не удалось скачать аудио файл.")
+            return
+        
+        audio_data = file_bytes.read()
+        
+        # Transcribe audio
+        settings = get_settings()
+        transcription_service = TranscriptionService(settings)
+        
+        try:
+            transcribed_text = await transcription_service.transcribe(audio_data, "voice.ogg")
+        except Exception as e:
+            logger.error(f"Transcription failed for user {user_id}: {e}")
+            await message.answer("⚠️ Не удалось распознать голосовое сообщение.")
+            return
+        
+        if not transcribed_text:
+            await message.answer("⚠️ Не удалось распознать речь в сообщении.")
+            return
+        
+        # Show what was recognized
+        await message.answer(f"🎤 Распознано: {transcribed_text}")
+        
+        # Show typing indicator again
+        await message.bot.send_chat_action(message.chat.id, "typing")
+        
+        # Send transcribed text to LLM (will be saved to history as user message)
+        response = await _get_llm_response_with_rate_limit_handling(
+            message, llm_client, user_id, transcribed_text
+        )
+        
+        # Send response
+        if len(response) > 4096:
+            for i in range(0, len(response), 4096):
+                await message.answer(response[i:i+4096])
+        else:
+            await message.answer(response)
+
+    except Exception as e:
+        logger.error(f"Voice message error for user {user_id}: {e}")
+        await message.answer(
+            "⚠️ Произошла ошибка при обработке голосового сообщения.\n"
+            "Попробуйте ещё раз."
+        )
+
 async def handle_oauth_code(
     message: Message,
     code: str,
