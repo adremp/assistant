@@ -16,7 +16,7 @@ class GetTasksTool(BaseTool):
     description = (
         "Получить список задач из Google Tasks пользователя. "
         "Используй этот инструмент когда пользователь спрашивает о своих задачах, "
-        "делах или todo-списке."
+        "делах, todo или списке задач."
     )
     parameters = {
         "type": "object",
@@ -31,22 +31,11 @@ class GetTasksTool(BaseTool):
                 "description": "Показывать выполненные задачи (по умолчанию false)",
                 "default": False,
             },
-            "tasklist_id": {
-                "type": "string",
-                "description": "ID списка задач (по умолчанию основной список)",
-                "default": "@default",
-            },
         },
         "required": [],
     }
 
     def __init__(self, token_storage: TokenStorage):
-        """
-        Initialize tool with dependencies.
-
-        Args:
-            token_storage: Redis-based token storage
-        """
         self.token_storage = token_storage
         self.tasks_service = TasksService()
         self.auth_service = GoogleAuthService(get_settings(), token_storage)
@@ -56,22 +45,8 @@ class GetTasksTool(BaseTool):
         user_id: int,
         max_results: int = 20,
         show_completed: bool = False,
-        tasklist_id: str = "@default",
         **kwargs: Any,
     ) -> dict[str, Any]:
-        """
-        Execute the tool to get tasks.
-
-        Args:
-            user_id: Telegram user ID
-            max_results: Maximum number of tasks
-            show_completed: Whether to show completed tasks
-            tasklist_id: Task list ID
-
-        Returns:
-            Dictionary with tasks list or error message
-        """
-        # Check if user is authorized
         credentials = await self.auth_service.get_credentials(user_id)
         if credentials is None:
             return {
@@ -86,7 +61,6 @@ class GetTasksTool(BaseTool):
         try:
             tasks = await self.tasks_service.list_tasks(
                 credentials=credentials,
-                tasklist_id=tasklist_id,
                 max_results=max_results,
                 show_completed=show_completed,
             )
@@ -95,7 +69,7 @@ class GetTasksTool(BaseTool):
                 return {
                     "success": True,
                     "tasks": [],
-                    "message": "Список задач пуст.",
+                    "message": "Нет задач в списке.",
                 }
 
             return {

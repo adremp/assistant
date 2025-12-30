@@ -43,21 +43,11 @@ class CreateCalendarEventTool(BaseTool):
                 "type": "string",
                 "description": "Описание события (опционально)",
             },
-            "location": {
-                "type": "string",
-                "description": "Место проведения события (опционально)",
-            },
         },
         "required": ["summary", "start_time", "end_time"],
     }
 
     def __init__(self, token_storage: TokenStorage):
-        """
-        Initialize tool with dependencies.
-
-        Args:
-            token_storage: Redis-based token storage
-        """
         self.token_storage = token_storage
         self.calendar_service = CalendarService()
         self.auth_service = GoogleAuthService(get_settings(), token_storage)
@@ -69,24 +59,8 @@ class CreateCalendarEventTool(BaseTool):
         start_time: str,
         end_time: str,
         description: str | None = None,
-        location: str | None = None,
         **kwargs: Any,
     ) -> dict[str, Any]:
-        """
-        Execute the tool to create a calendar event.
-
-        Args:
-            user_id: Telegram user ID
-            summary: Event title
-            start_time: Start time in ISO format
-            end_time: End time in ISO format
-            description: Event description
-            location: Event location
-
-        Returns:
-            Dictionary with created event or error message
-        """
-        # Check if user is authorized
         credentials = await self.auth_service.get_credentials(user_id)
         if credentials is None:
             return {
@@ -105,7 +79,6 @@ class CreateCalendarEventTool(BaseTool):
                 start_time=start_time,
                 end_time=end_time,
                 description=description,
-                location=location,
             )
 
             return {

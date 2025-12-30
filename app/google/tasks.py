@@ -168,6 +168,66 @@ class TasksService:
             logger.error(f"Failed to create task: {e}")
             raise
 
+    async def update_task(
+        self,
+        credentials: Credentials,
+        task_id: str,
+        title: str | None = None,
+        notes: str | None = None,
+        due: str | None = None,
+        tasklist_id: str = "@default",
+    ) -> dict[str, Any]:
+        """
+        Update an existing task.
+
+        Args:
+            credentials: Valid Google credentials
+            task_id: Task ID to update
+            title: New task title
+            notes: New task notes
+            due: New due date in RFC 3339 format
+            tasklist_id: Task list ID (default: @default)
+
+        Returns:
+            Updated task dictionary
+        """
+        service = self._get_service(credentials)
+
+        try:
+            # Get existing task
+            task = (
+                service.tasks()
+                .get(tasklist=tasklist_id, task=task_id)
+                .execute()
+            )
+
+            # Update fields
+            if title:
+                task["title"] = title
+            if notes is not None:
+                task["notes"] = notes
+            if due is not None:
+                task["due"] = due
+
+            updated = (
+                service.tasks()
+                .update(tasklist=tasklist_id, task=task_id, body=task)
+                .execute()
+            )
+            logger.info(f"Updated task: {task_id}")
+
+            return {
+                "id": updated.get("id"),
+                "title": updated.get("title"),
+                "notes": updated.get("notes"),
+                "due": updated.get("due"),
+                "status": updated.get("status"),
+            }
+
+        except HttpError as e:
+            logger.error(f"Failed to update task {task_id}: {e}")
+            raise
+
     async def complete_task(
         self,
         credentials: Credentials,

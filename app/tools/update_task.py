@@ -1,4 +1,4 @@
-"""Tool: Create task in Google Tasks."""
+"""Tool: Update task in Google Tasks."""
 
 import logging
 from typing import Any
@@ -12,35 +12,35 @@ from app.config import get_settings
 logger = logging.getLogger(__name__)
 
 
-class CreateTaskTool(BaseTool):
-    """Tool to create a new task in Google Tasks."""
+class UpdateTaskTool(BaseTool):
+    """Tool to update an existing task in Google Tasks."""
 
-    name = "create_task"
+    name = "update_task"
     description = (
-        "Создать новую задачу в Google Tasks пользователя. "
-        "Используй этот инструмент когда пользователь хочет добавить новую задачу, "
-        "дело в свой список или todo."
+        "Обновить существующую задачу в Google Tasks. "
+        "Используй для изменения названия, описания или срока задачи."
     )
     parameters = {
         "type": "object",
         "properties": {
+            "task_id": {
+                "type": "string",
+                "description": "ID задачи для обновления",
+            },
             "title": {
                 "type": "string",
-                "description": "Название задачи",
+                "description": "Новое название задачи (опционально)",
             },
             "notes": {
                 "type": "string",
-                "description": "Заметки или описание задачи (опционально)",
+                "description": "Новое описание задачи (опционально)",
             },
             "due": {
                 "type": "string",
-                "description": (
-                    "Срок выполнения в формате RFC 3339 "
-                    "(например: 2024-01-15T00:00:00.000Z)"
-                ),
+                "description": "Новый срок в формате RFC 3339 (опционально)",
             },
         },
-        "required": ["title"],
+        "required": ["task_id"],
     }
 
     def __init__(self, token_storage: TokenStorage):
@@ -51,29 +51,25 @@ class CreateTaskTool(BaseTool):
     async def execute(
         self,
         user_id: int,
-        title: str,
+        task_id: str,
+        title: str | None = None,
         notes: str | None = None,
         due: str | None = None,
         **kwargs: Any,
     ) -> dict[str, Any]:
-        logger.info(f"create_task called for user_id={user_id}, title={title}")
-        
         credentials = await self.auth_service.get_credentials(user_id)
-        logger.info(f"create_task credentials for user {user_id}: {credentials is not None}")
         
         if credentials is None:
             return {
                 "success": False,
                 "error": "not_authorized",
-                "message": (
-                    "Пользователь не авторизован в Google. "
-                    "Попроси пользователя выполнить команду /auth для авторизации."
-                ),
+                "message": "Пользователь не авторизован. Попроси выполнить /auth",
             }
 
         try:
-            task = await self.tasks_service.create_task(
+            task = await self.tasks_service.update_task(
                 credentials=credentials,
+                task_id=task_id,
                 title=title,
                 notes=notes,
                 due=due,
@@ -82,12 +78,12 @@ class CreateTaskTool(BaseTool):
             return {
                 "success": True,
                 "task": task,
-                "message": f"Задача '{title}' успешно создана.",
+                "message": f"Задача '{task.get('title')}' обновлена.",
             }
 
         except Exception as e:
             return {
                 "success": False,
                 "error": "api_error",
-                "message": f"Ошибка при создании задачи: {str(e)}",
+                "message": f"Ошибка при обновлении задачи: {str(e)}",
             }

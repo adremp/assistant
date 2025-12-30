@@ -25,22 +25,11 @@ class CompleteTaskTool(BaseTool):
                 "type": "string",
                 "description": "ID задачи для завершения",
             },
-            "tasklist_id": {
-                "type": "string",
-                "description": "ID списка задач (по умолчанию основной список)",
-                "default": "@default",
-            },
         },
         "required": ["task_id"],
     }
 
     def __init__(self, token_storage: TokenStorage):
-        """
-        Initialize tool with dependencies.
-
-        Args:
-            token_storage: Redis-based token storage
-        """
         self.token_storage = token_storage
         self.tasks_service = TasksService()
         self.auth_service = GoogleAuthService(get_settings(), token_storage)
@@ -49,21 +38,8 @@ class CompleteTaskTool(BaseTool):
         self,
         user_id: int,
         task_id: str,
-        tasklist_id: str = "@default",
         **kwargs: Any,
     ) -> dict[str, Any]:
-        """
-        Execute the tool to complete a task.
-
-        Args:
-            user_id: Telegram user ID
-            task_id: Task ID to complete
-            tasklist_id: Task list ID
-
-        Returns:
-            Dictionary with completed task or error message
-        """
-        # Check if user is authorized
         credentials = await self.auth_service.get_credentials(user_id)
         if credentials is None:
             return {
@@ -79,7 +55,6 @@ class CompleteTaskTool(BaseTool):
             task = await self.tasks_service.complete_task(
                 credentials=credentials,
                 task_id=task_id,
-                tasklist_id=tasklist_id,
             )
 
             return {

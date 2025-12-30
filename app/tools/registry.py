@@ -36,17 +36,24 @@ class ToolRegistry:
         # Import tools here to avoid circular imports
         from app.tools.get_calendar_events import GetCalendarEventsTool
         from app.tools.create_calendar_event import CreateCalendarEventTool
+        from app.tools.update_calendar_event import UpdateCalendarEventTool
         from app.tools.get_tasks import GetTasksTool
         from app.tools.create_task import CreateTaskTool
+        from app.tools.update_task import UpdateTaskTool
         from app.tools.complete_task import CompleteTaskTool
         from app.tools.respond_to_user import RespondToUserTool
 
         tools = [
+            # Calendar tools
             GetCalendarEventsTool(self.token_storage),
             CreateCalendarEventTool(self.token_storage),
+            UpdateCalendarEventTool(self.token_storage),
+            # Task tools
             GetTasksTool(self.token_storage),
             CreateTaskTool(self.token_storage),
+            UpdateTaskTool(self.token_storage),
             CompleteTaskTool(self.token_storage),
+            # Response tool
             RespondToUserTool(),
         ]
 
