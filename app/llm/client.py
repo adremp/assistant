@@ -178,7 +178,7 @@ class LLMClient:
         
         # Check for tool calls
         if message.tool_calls:
-            # Full message for API (needs all details)
+            # Full message for API and history (with all tool call details)
             assistant_message_full = {
                 "role": "assistant",
                 "content": message.content or "",
@@ -195,6 +195,8 @@ class LLMClient:
                 ],
             }
             history.append(assistant_message_full)
+            # Save full message to Redis
+            await self.history.append(user_id, assistant_message_full)
 
             # Execute each tool call
             for tool_call in message.tool_calls:
@@ -216,7 +218,7 @@ class LLMClient:
                     # Special handling for respond_to_user tool
                     if tool_name == "respond_to_user" and result.get("type") == "user_response":
                         user_response = result.get("response", "")
-                        # Save only the actual response to history (no "[Использованы инструменты]" prefix)
+                        # Save the actual response to history
                         await self.history.append(user_id, {"role": "assistant", "content": user_response})
                         return user_response
                     
@@ -228,13 +230,14 @@ class LLMClient:
                         "error": str(e),
                     }, ensure_ascii=False)
 
-                # Add tool result to current history for API (not saved to Redis)
+                # Add tool result to history (both in-memory and Redis)
                 tool_message = {
                     "role": "tool",
                     "tool_call_id": tool_call.id,
                     "content": result_str,
                 }
                 history.append(tool_message)
+                await self.history.append(user_id, tool_message)
 
             # Call LLM again with tool results
             response = await self._call_llm(history, tools)
