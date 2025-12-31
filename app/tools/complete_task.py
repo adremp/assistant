@@ -14,16 +14,15 @@ class CompleteTaskTool(BaseTool):
 
     name = "complete_task"
     description = (
-        "Отметить задачу как выполненную в Google Tasks. "
-        "Используй этот инструмент когда пользователь хочет завершить задачу, "
-        "отметить её выполненной или закрыть."
+        "Mark a task as completed in Google Tasks. "
+        "Use this tool when user wants to finish a task, mark it done or close it."
     )
     parameters = {
         "type": "object",
         "properties": {
             "task_id": {
                 "type": "string",
-                "description": "ID задачи для завершения",
+                "description": "ID of the task to complete",
             },
         },
         "required": ["task_id"],
@@ -45,10 +44,7 @@ class CompleteTaskTool(BaseTool):
             return {
                 "success": False,
                 "error": "not_authorized",
-                "message": (
-                    "Пользователь не авторизован в Google. "
-                    "Попроси пользователя выполнить команду /auth для авторизации."
-                ),
+                "message": "User is not authorized in Google. Ask user to run /auth command.",
             }
 
         try:
@@ -60,12 +56,12 @@ class CompleteTaskTool(BaseTool):
             return {
                 "success": True,
                 "task": task,
-                "message": f"Задача '{task.get('title', task_id)}' отмечена как выполненная.",
+                "message": f"Task '{task.get('title', task_id)}' marked as completed.",
             }
 
         except Exception as e:
             return {
                 "success": False,
                 "error": "api_error",
-                "message": f"Ошибка при завершении задачи: {str(e)}",
+                "message": f"Error completing task: {str(e)}",
             }

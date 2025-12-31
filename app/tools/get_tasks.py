@@ -14,21 +14,20 @@ class GetTasksTool(BaseTool):
 
     name = "get_tasks"
     description = (
-        "Получить список задач из Google Tasks пользователя. "
-        "Используй этот инструмент когда пользователь спрашивает о своих задачах, "
-        "делах, todo или списке задач."
+        "Get tasks from user's Google Tasks. "
+        "Use this tool when user asks about their tasks, todos or task list."
     )
     parameters = {
         "type": "object",
         "properties": {
             "max_results": {
                 "type": "integer",
-                "description": "Максимальное количество задач (по умолчанию 20)",
+                "description": "Maximum number of tasks (default 20)",
                 "default": 20,
             },
             "show_completed": {
                 "type": "boolean",
-                "description": "Показывать выполненные задачи (по умолчанию false)",
+                "description": "Show completed tasks (default false)",
                 "default": False,
             },
         },
@@ -52,10 +51,7 @@ class GetTasksTool(BaseTool):
             return {
                 "success": False,
                 "error": "not_authorized",
-                "message": (
-                    "Пользователь не авторизован в Google. "
-                    "Попроси пользователя выполнить команду /auth для авторизации."
-                ),
+                "message": "User is not authorized in Google. Ask user to run /auth command.",
             }
 
         try:
@@ -69,7 +65,7 @@ class GetTasksTool(BaseTool):
                 return {
                     "success": True,
                     "tasks": [],
-                    "message": "Нет задач в списке.",
+                    "message": "No tasks in the list.",
                 }
 
             return {
@@ -82,5 +78,5 @@ class GetTasksTool(BaseTool):
             return {
                 "success": False,
                 "error": "api_error",
-                "message": f"Ошибка при получении задач: {str(e)}",
+                "message": f"Error getting tasks: {str(e)}",
             }

@@ -1,52 +1,47 @@
-"""Tool: Respond to user - format and send final response."""
+"""Tool: Respond to user with final message."""
 
-import logging
 from typing import Any
 
 from app.tools.base import BaseTool
 
-logger = logging.getLogger(__name__)
-
 
 class RespondToUserTool(BaseTool):
-    """Tool to send a formatted response to the user."""
+    """Tool to send final response to user."""
 
     name = "respond_to_user"
     description = (
-        "Отправить ответ пользователю. ВСЕГДА используй этот инструмент для финального ответа. "
-        "Не отвечай напрямую - только через этот инструмент."
+        "Send a response message to the user. "
+        "ALWAYS use this tool to reply to the user. "
+        "Do not respond with plain text - only through this tool."
     )
     parameters = {
         "type": "object",
         "properties": {
-            "message": {
+            "response": {
                 "type": "string",
-                "description": "Сообщение для пользователя на русском языке. Должно быть кратким и понятным.",
+                "description": "The message to send to the user (must be in Russian)",
             },
         },
-        "required": ["message"],
+        "required": ["response"],
     }
 
     async def execute(
         self,
         user_id: int,
-        message: str,
+        response: str,
         **kwargs: Any,
     ) -> dict[str, Any]:
         """
-        Execute the tool to prepare user response.
+        Execute the tool - just return the response for the handler to send.
 
         Args:
             user_id: Telegram user ID
-            message: Message to send to user
+            response: Response message for user
 
         Returns:
-            Dictionary with the formatted response
+            Dictionary with response for handler
         """
-        logger.info(f"respond_to_user for {user_id}: {message[:50]}...")
-        
         return {
-            "success": True,
-            "response": message,
             "type": "user_response",
+            "response": response,
         }

@@ -17,26 +17,25 @@ class CreateTaskTool(BaseTool):
 
     name = "create_task"
     description = (
-        "Создать новую задачу в Google Tasks пользователя. "
-        "Используй этот инструмент когда пользователь хочет добавить новую задачу, "
-        "дело в свой список или todo."
+        "Create a new task in user's Google Tasks. "
+        "Use this tool when user wants to add a new task or todo item."
     )
     parameters = {
         "type": "object",
         "properties": {
             "title": {
                 "type": "string",
-                "description": "Название задачи",
+                "description": "Task title",
             },
             "notes": {
                 "type": "string",
-                "description": "Заметки или описание задачи (опционально)",
+                "description": "Task notes or description (optional)",
             },
             "due": {
                 "type": "string",
                 "description": (
-                    "Срок выполнения в формате RFC 3339 "
-                    "(например: 2024-01-15T00:00:00.000Z)"
+                    "Due date in RFC 3339 format "
+                    "(e.g., 2024-01-15T00:00:00.000Z)"
                 ),
             },
         },
@@ -59,16 +58,12 @@ class CreateTaskTool(BaseTool):
         logger.info(f"create_task called for user_id={user_id}, title={title}")
         
         credentials = await self.auth_service.get_credentials(user_id)
-        logger.info(f"create_task credentials for user {user_id}: {credentials is not None}")
         
         if credentials is None:
             return {
                 "success": False,
                 "error": "not_authorized",
-                "message": (
-                    "Пользователь не авторизован в Google. "
-                    "Попроси пользователя выполнить команду /auth для авторизации."
-                ),
+                "message": "User is not authorized in Google. Ask user to run /auth command.",
             }
 
         try:
@@ -82,12 +77,12 @@ class CreateTaskTool(BaseTool):
             return {
                 "success": True,
                 "task": task,
-                "message": f"Задача '{title}' успешно создана.",
+                "message": f"Task '{title}' created successfully.",
             }
 
         except Exception as e:
             return {
                 "success": False,
                 "error": "api_error",
-                "message": f"Ошибка при создании задачи: {str(e)}",
+                "message": f"Error creating task: {str(e)}",
             }

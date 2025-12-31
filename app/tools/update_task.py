@@ -17,27 +17,27 @@ class UpdateTaskTool(BaseTool):
 
     name = "update_task"
     description = (
-        "Обновить существующую задачу в Google Tasks. "
-        "Используй для изменения названия, описания или срока задачи."
+        "Update an existing task in Google Tasks. "
+        "Use this tool to change task title, description or due date."
     )
     parameters = {
         "type": "object",
         "properties": {
             "task_id": {
                 "type": "string",
-                "description": "ID задачи для обновления",
+                "description": "ID of the task to update",
             },
             "title": {
                 "type": "string",
-                "description": "Новое название задачи (опционально)",
+                "description": "New task title (optional)",
             },
             "notes": {
                 "type": "string",
-                "description": "Новое описание задачи (опционально)",
+                "description": "New task description (optional)",
             },
             "due": {
                 "type": "string",
-                "description": "Новый срок в формате RFC 3339 (опционально)",
+                "description": "New due date in RFC 3339 format (optional)",
             },
         },
         "required": ["task_id"],
@@ -63,7 +63,7 @@ class UpdateTaskTool(BaseTool):
             return {
                 "success": False,
                 "error": "not_authorized",
-                "message": "Пользователь не авторизован. Попроси выполнить /auth",
+                "message": "User is not authorized. Ask user to run /auth command.",
             }
 
         try:
@@ -78,12 +78,12 @@ class UpdateTaskTool(BaseTool):
             return {
                 "success": True,
                 "task": task,
-                "message": f"Задача '{task.get('title')}' обновлена.",
+                "message": f"Task '{task.get('title')}' updated.",
             }
 
         except Exception as e:
             return {
                 "success": False,
                 "error": "api_error",
-                "message": f"Ошибка при обновлении задачи: {str(e)}",
+                "message": f"Error updating task: {str(e)}",
             }

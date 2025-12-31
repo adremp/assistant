@@ -14,34 +14,33 @@ class CreateCalendarEventTool(BaseTool):
 
     name = "create_calendar_event"
     description = (
-        "Создать новое событие в Google Calendar пользователя. "
-        "Используй этот инструмент когда пользователь хочет добавить встречу, "
-        "напоминание или событие в календарь."
+        "Create a new event in user's Google Calendar. "
+        "Use this tool when user wants to add a meeting, reminder or event to calendar."
     )
     parameters = {
         "type": "object",
         "properties": {
             "summary": {
                 "type": "string",
-                "description": "Название события",
+                "description": "Event title",
             },
             "start_time": {
                 "type": "string",
                 "description": (
-                    "Время начала события в формате ISO 8601 "
-                    "(например: 2024-01-15T09:00:00+05:00)"
+                    "Event start time in ISO 8601 format "
+                    "(e.g., 2024-01-15T09:00:00+05:00)"
                 ),
             },
             "end_time": {
                 "type": "string",
                 "description": (
-                    "Время окончания события в формате ISO 8601 "
-                    "(например: 2024-01-15T10:00:00+05:00)"
+                    "Event end time in ISO 8601 format "
+                    "(e.g., 2024-01-15T10:00:00+05:00)"
                 ),
             },
             "description": {
                 "type": "string",
-                "description": "Описание события (опционально)",
+                "description": "Event description (optional)",
             },
         },
         "required": ["summary", "start_time", "end_time"],
@@ -66,10 +65,7 @@ class CreateCalendarEventTool(BaseTool):
             return {
                 "success": False,
                 "error": "not_authorized",
-                "message": (
-                    "Пользователь не авторизован в Google. "
-                    "Попроси пользователя выполнить команду /auth для авторизации."
-                ),
+                "message": "User is not authorized in Google. Ask user to run /auth command.",
             }
 
         try:
@@ -84,12 +80,12 @@ class CreateCalendarEventTool(BaseTool):
             return {
                 "success": True,
                 "event": event,
-                "message": f"Событие '{summary}' успешно создано.",
+                "message": f"Event '{summary}' created successfully.",
             }
 
         except Exception as e:
             return {
                 "success": False,
                 "error": "api_error",
-                "message": f"Ошибка при создании события: {str(e)}",
+                "message": f"Error creating event: {str(e)}",
             }

@@ -17,31 +17,31 @@ class UpdateCalendarEventTool(BaseTool):
 
     name = "update_calendar_event"
     description = (
-        "Обновить существующее событие в Google Calendar. "
-        "Используй для изменения названия, времени или описания события."
+        "Update an existing event in Google Calendar. "
+        "Use this tool to change event title, time or description."
     )
     parameters = {
         "type": "object",
         "properties": {
             "event_id": {
                 "type": "string",
-                "description": "ID события для обновления",
+                "description": "ID of the event to update",
             },
             "summary": {
                 "type": "string",
-                "description": "Новое название события",
+                "description": "New event title",
             },
             "start_time": {
                 "type": "string",
-                "description": "Новое время начала в формате ISO 8601 с часовым поясом",
+                "description": "New start time in ISO 8601 format with timezone",
             },
             "end_time": {
                 "type": "string",
-                "description": "Новое время окончания в формате ISO 8601 с часовым поясом",
+                "description": "New end time in ISO 8601 format with timezone",
             },
             "description": {
                 "type": "string",
-                "description": "Новое описание события",
+                "description": "New event description",
             },
         },
         "required": ["event_id"],
@@ -68,7 +68,7 @@ class UpdateCalendarEventTool(BaseTool):
             return {
                 "success": False,
                 "error": "not_authorized",
-                "message": "Пользователь не авторизован. Попроси выполнить /auth",
+                "message": "User is not authorized. Ask user to run /auth command.",
             }
 
         try:
@@ -84,12 +84,12 @@ class UpdateCalendarEventTool(BaseTool):
             return {
                 "success": True,
                 "event": event,
-                "message": f"Событие '{event.get('summary')}' обновлено.",
+                "message": f"Event '{event.get('summary')}' updated.",
             }
 
         except Exception as e:
             return {
                 "success": False,
                 "error": "api_error",
-                "message": f"Ошибка при обновлении события: {str(e)}",
+                "message": f"Error updating event: {str(e)}",
             }
