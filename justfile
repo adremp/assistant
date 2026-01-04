@@ -1,6 +1,7 @@
-# Run the bot
-run:
-	fastapi dev main.py
+
+# Run locally (requires Redis running)
+dev:
+	uv run fastapi dev app/main.py
 
 # Install dependencies
 install:

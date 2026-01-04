@@ -8,6 +8,9 @@ from redis.asyncio import Redis
 
 from app.config import get_settings
 from app.storage.tokens import TokenStorage
+from app.storage.reminders import ReminderStorage
+from app.storage.pending_responses import PendingResponseStorage
+from app.scheduler.service import ReminderScheduler
 from app.llm.client import LLMClient
 from app.llm.history import ConversationHistory
 from app.tools.registry import init_tool_registry
@@ -30,6 +33,7 @@ async def lifespan(app: FastAPI):
     - Redis connection
     - Telegram bot
     - LLM client
+    - Reminder scheduler
     """
     settings = get_settings()
     logger.info("Starting application...")
@@ -46,8 +50,27 @@ async def lifespan(app: FastAPI):
     # Initialize token storage
     token_storage = TokenStorage(redis, settings.token_ttl_seconds)
 
-    # Initialize tool registry
-    tool_registry = init_tool_registry(redis, token_storage)
+    # Initialize Telegram bot first (needed for scheduler)
+    bot = await create_bot(settings)
+    dp = create_dispatcher()
+
+    # Initialize reminder storages and scheduler
+    reminder_storage = ReminderStorage(redis)
+    pending_storage = PendingResponseStorage(redis)
+    
+    reminder_scheduler = ReminderScheduler(
+        redis_url=settings.redis_url,
+        bot=bot,
+        reminder_storage=reminder_storage,
+        pending_storage=pending_storage,
+        token_storage=token_storage,
+        default_timezone=settings.default_timezone,
+    )
+    await reminder_scheduler.start()
+    logger.info(f"Reminder scheduler started (timezone: {settings.default_timezone})")
+
+    # Initialize tool registry with scheduler and storage
+    tool_registry = init_tool_registry(redis, token_storage, reminder_scheduler, reminder_storage)
     logger.info(f"Loaded tools: {tool_registry.tool_names}")
 
     # Initialize LLM client
@@ -62,16 +85,14 @@ async def lifespan(app: FastAPI):
     from app.llm.summarization_worker import SummarizationWorker
     summarization_worker = SummarizationWorker(redis, llm_client)
     await summarization_worker.start()
-
-    # Initialize Telegram bot
-    bot = await create_bot(settings)
-    dp = create_dispatcher()
     
     # Store dependencies in dispatcher's workflow_data for handlers to access
     dp.workflow_data["redis"] = redis
     dp.workflow_data["token_storage"] = token_storage
     dp.workflow_data["llm_client"] = llm_client
     dp.workflow_data["tool_registry"] = tool_registry
+    dp.workflow_data["reminder_scheduler"] = reminder_scheduler
+    dp.workflow_data["pending_storage"] = pending_storage
 
     # Store in app state
     app.state.redis = redis
@@ -79,6 +100,7 @@ async def lifespan(app: FastAPI):
     app.state.dp = dp
     app.state.llm_client = llm_client
     app.state.summarization_worker = summarization_worker
+    app.state.reminder_scheduler = reminder_scheduler
 
     logger.info("Application started successfully")
 
@@ -91,6 +113,9 @@ async def lifespan(app: FastAPI):
 
     # Cleanup
     logger.info("Shutting down application...")
+    
+    # Stop reminder scheduler
+    await reminder_scheduler.stop()
     
     # Stop summarization worker
     await summarization_worker.stop()

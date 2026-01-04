@@ -357,3 +357,51 @@ class TasksService:
         except HttpError as e:
             logger.error(f"Failed to toggle task {task_id}: {e}")
             raise
+
+    async def create_completed_task(
+        self,
+        credentials: Credentials,
+        title: str,
+        notes: str | None = None,
+        tasklist_id: str = "@default",
+    ) -> dict[str, Any]:
+        """
+        Create a task and immediately mark it as completed.
+
+        Args:
+            credentials: Valid Google credentials
+            title: Task title
+            notes: Task notes/description
+            tasklist_id: Task list ID (default: @default)
+
+        Returns:
+            Created and completed task dictionary
+        """
+        service = self._get_service(credentials)
+
+        task_body: dict[str, Any] = {
+            "title": title,
+            "status": "completed",
+        }
+        if notes:
+            task_body["notes"] = notes
+
+        try:
+            task = (
+                service.tasks()
+                .insert(tasklist=tasklist_id, body=task_body)
+                .execute()
+            )
+            logger.info(f"Created completed task: {task.get('id')}")
+
+            return {
+                "id": task.get("id"),
+                "title": task.get("title"),
+                "notes": task.get("notes"),
+                "status": task.get("status"),
+                "completed": task.get("completed"),
+            }
+
+        except HttpError as e:
+            logger.error(f"Failed to create completed task: {e}")
+            raise

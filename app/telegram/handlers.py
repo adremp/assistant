@@ -3,6 +3,7 @@
 import logging
 import re
 from typing import Any
+from datetime import datetime
 
 from aiogram import Router, F
 from aiogram.filters import CommandStart, Command
@@ -10,6 +11,8 @@ from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKe
 
 from app.llm.client import LLMClient
 from app.storage.tokens import TokenStorage
+from app.storage.pending_responses import PendingResponseStorage
+from app.scheduler.service import ReminderScheduler
 
 logger = logging.getLogger(__name__)
 
@@ -21,6 +24,7 @@ def get_main_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="📋 Задачи на сегодня", callback_data="tasks_today")],
         [InlineKeyboardButton(text="📅 События на сегодня", callback_data="events_today")],
+        [InlineKeyboardButton(text="⏰ Мои напоминания", callback_data="my_reminders")],
     ])
 
 
@@ -41,6 +45,7 @@ async def handle_start(message: Message) -> None:
         "Команды:\n"
         "/auth — авторизация в Google\n"
         "/tasks — задачи на сегодня\n"
+        "/reminders — мои напоминания\n"
         "/clear — очистить историю диалога\n\n"
         "💬 Или просто напиши, что тебе нужно!",
         reply_markup=get_main_keyboard(),
@@ -61,11 +66,13 @@ async def handle_help(message: Message) -> None:
         "- Покажи мои события на сегодня\n"
         "- Создай встречу завтра в 10:00\n"
         "- Какие у меня задачи?\n"
-        "- Добавь задачу купить молоко\n\n"
+        "- Добавь задачу купить молоко\n"
+        "- Напоминай каждый день в 20:00 как прошёл день\n\n"
         "Команды:\n"
         "/start — начать работу\n"
         "/auth — авторизация в Google\n"
         "/tasks — задачи на сегодня\n"
+        "/reminders — мои напоминания\n"
         "/clear — очистить историю диалога"
     )
 
@@ -259,19 +266,78 @@ async def handle_clear(message: Message, llm_client: LLMClient) -> None:
     await message.answer("🗑 История диалога очищена.")
 
 
+@router.message(Command("reminders"))
+async def handle_reminders_command(
+    message: Message,
+    reminder_scheduler: ReminderScheduler,
+) -> None:
+    """Handle /reminders command - show active reminders."""
+    user_id = message.from_user.id if message.from_user else 0
+    await show_user_reminders(message, user_id, reminder_scheduler)
+
+
+async def show_user_reminders(
+    message: Message,
+    user_id: int,
+    reminder_scheduler: ReminderScheduler,
+    edit: bool = False,
+) -> None:
+    """Show user's active reminders with delete buttons."""
+    reminders = await reminder_scheduler.get_user_reminders(user_id)
+    
+    if not reminders:
+        text = "⏰ Ваши напоминания:\n\nСписок пуст!"
+        keyboard = None
+    else:
+        lines = ["⏰ Ваши напоминания:\n"]
+        buttons = []
+        
+        weekdays = ["Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Вс"]
+        
+        for reminder in reminders:
+            reminder_id = reminder.get("id", "")
+            template = reminder.get("template", "Без текста")
+            schedule_type = reminder.get("schedule_type", "daily")
+            time_str = reminder.get("time", "--:--")
+            weekday = reminder.get("weekday")
+            
+            if schedule_type == "daily":
+                schedule_info = f"Ежедневно в {time_str}"
+            else:
+                day_name = weekdays[weekday] if weekday is not None else "?"
+                schedule_info = f"Кажд. {day_name} в {time_str}"
+            
+            # Truncate template for display
+            template_short = template[:40] + "..." if len(template) > 40 else template
+            lines.append(f"• {template_short}\n  🕒 {schedule_info}")
+        
+        text = "\n".join(lines)
+        buttons.append([
+            InlineKeyboardButton(text="🔄 Обновить", callback_data="my_reminders")
+        ])
+        keyboard = InlineKeyboardMarkup(inline_keyboard=buttons)
+    
+    if edit and message:
+        await message.edit_text(text, reply_markup=keyboard)
+    else:
+        await message.answer(text, reply_markup=keyboard)
+
+
 @router.message(F.text)
 async def handle_text_message(
     message: Message,
     llm_client: LLMClient,
     token_storage: TokenStorage,
+    pending_storage: PendingResponseStorage,
 ) -> None:
     """
-    Handle all text messages - send to LLM.
+    Handle all text messages - check for pending reminder or send to LLM.
 
     Args:
         message: Telegram message
         llm_client: LLM client from workflow_data
         token_storage: Token storage from workflow_data
+        pending_storage: Pending response storage
     """
     if not message.text:
         return
@@ -282,6 +348,14 @@ async def handle_text_message(
     # Check if this is an OAuth code (starts with 4/)
     if text.startswith("4/"):
         await handle_oauth_code(message, text, token_storage, llm_client)
+        return
+
+    # Check for pending reminder response
+    pending = await pending_storage.get_pending(user_id)
+    if pending:
+        await _handle_reminder_response(
+            message, user_id, text, pending, pending_storage, token_storage
+        )
         return
 
     # Show typing indicator
@@ -347,13 +421,17 @@ async def _get_llm_response_with_rate_limit_handling(
 async def handle_voice_message(
     message: Message,
     llm_client: LLMClient,
+    pending_storage: PendingResponseStorage,
+    token_storage: TokenStorage,
 ) -> None:
     """
-    Handle voice messages - transcribe and send to LLM.
+    Handle voice messages - transcribe and check for pending reminder or send to LLM.
 
     Args:
         message: Telegram message with voice
         llm_client: LLM client from workflow_data
+        pending_storage: Pending response storage
+        token_storage: Token storage for Google auth
     """
     from app.llm.transcription import TranscriptionService
     from app.config import get_settings
@@ -398,7 +476,15 @@ async def handle_voice_message(
             return
         
         # Show what was recognized
-        await message.answer(f"🎤 Распознано: {transcribed_text}")
+        await message.answer(f"� Распознано: {transcribed_text}")
+        
+        # Check for pending reminder response
+        pending = await pending_storage.get_pending(user_id)
+        if pending:
+            await _handle_reminder_response(
+                message, user_id, transcribed_text, pending, pending_storage, token_storage
+            )
+            return
         
         # Show typing indicator again
         await message.bot.send_chat_action(message.chat.id, "typing")
@@ -468,3 +554,74 @@ async def handle_oauth_code(
             "⚠️ Ошибка при обработке кода авторизации.\n"
             "Попробуйте выполнить /auth заново."
         )
+
+
+async def _handle_reminder_response(
+    message: Message,
+    user_id: int,
+    response_text: str,
+    pending: dict,
+    pending_storage: PendingResponseStorage,
+    token_storage: TokenStorage,
+) -> None:
+    """Handle user's response to a reminder by creating a completed Google Task."""
+    from app.google.auth import GoogleAuthService
+    from app.google.tasks import TasksService
+    from app.config import get_settings
+    
+    reminder_id = pending.get("reminder_id", "")
+    template = pending.get("template", "")
+    
+    # Clear pending state first
+    await pending_storage.clear_pending(user_id)
+    
+    # Try to save as completed Google Task
+    settings = get_settings()
+    auth_service = GoogleAuthService(settings, token_storage)
+    credentials = await auth_service.get_credentials(user_id)
+    
+    if credentials:
+        try:
+            tasks_service = TasksService()
+            now = datetime.now().strftime("%Y-%m-%d %H:%M")
+            task_title = f"📝 {template}"
+            task_notes = f"Ответ ({now}):\n{response_text}"
+            
+            await tasks_service.create_completed_task(
+                credentials=credentials,
+                title=task_title,
+                notes=task_notes,
+            )
+            
+            await message.answer(
+                "✅ Ответ сохранён в Google Tasks!\n\n"
+                f"📝 Шаблон: {template}\n"
+                f"💬 Ответ: {response_text}"
+            )
+            logger.info(f"Created completed task for reminder {reminder_id}, user {user_id}")
+        except Exception as e:
+            logger.error(f"Failed to create task for reminder response: {e}")
+            await message.answer(
+                "⚠️ Не удалось сохранить в Google Tasks.\n\n"
+                f"📝 Шаблон: {template}\n"
+                f"💬 Ответ: {response_text}"
+            )
+    else:
+        await message.answer(
+            "⚠️ Требуется авторизация в Google (/auth) для сохранения ответа.\n\n"
+            f"📝 Шаблон: {template}\n"
+            f"💬 Ответ: {response_text}"
+        )
+
+
+@router.callback_query(F.data == "my_reminders")
+async def handle_my_reminders_callback(
+    callback: CallbackQuery,
+    reminder_scheduler: ReminderScheduler,
+) -> None:
+    """Handle my_reminders button click."""
+    await callback.answer()
+    user_id = callback.from_user.id
+    await show_user_reminders(callback.message, user_id, reminder_scheduler, edit=True)
+
+

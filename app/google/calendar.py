@@ -80,6 +80,8 @@ class CalendarService:
                     or event.get("end", {}).get("date"),
                     "description": event.get("description"),
                     "location": event.get("location"),
+                    "recurrence": event.get("recurrence"),
+                    "recurring_event_id": event.get("recurringEventId"),
                     "html_link": event.get("htmlLink"),
                 }
                 for event in events
@@ -97,6 +99,8 @@ class CalendarService:
         end_time: str,
         description: str | None = None,
         location: str | None = None,
+        recurrence: list[str] | None = None,
+        timezone: str | None = None,
         calendar_id: str = "primary",
     ) -> dict[str, Any]:
         """
@@ -109,6 +113,8 @@ class CalendarService:
             end_time: End time in ISO format
             description: Event description
             location: Event location
+            recurrence: List of RRULE strings (e.g., ["RRULE:FREQ=DAILY"])
+            timezone: Timezone for recurring events (e.g., "Asia/Almaty")
             calendar_id: Calendar ID (default: primary)
 
         Returns:
@@ -116,16 +122,26 @@ class CalendarService:
         """
         service = self._get_service(credentials)
 
-        event_body = {
-            "summary": summary,
-            "start": {"dateTime": start_time},
-            "end": {"dateTime": end_time},
-        }
+        # Build start/end with timezone if provided
+        if timezone:
+            event_body = {
+                "summary": summary,
+                "start": {"dateTime": start_time, "timeZone": timezone},
+                "end": {"dateTime": end_time, "timeZone": timezone},
+            }
+        else:
+            event_body = {
+                "summary": summary,
+                "start": {"dateTime": start_time},
+                "end": {"dateTime": end_time},
+            }
 
         if description:
             event_body["description"] = description
         if location:
             event_body["location"] = location
+        if recurrence:
+            event_body["recurrence"] = recurrence
 
         try:
             event = (
@@ -140,6 +156,8 @@ class CalendarService:
                 "summary": event.get("summary"),
                 "start": event.get("start", {}).get("dateTime"),
                 "end": event.get("end", {}).get("dateTime"),
+                "description": event.get("description"),
+                "recurrence": event.get("recurrence"),
                 "html_link": event.get("htmlLink"),
             }
 
@@ -156,6 +174,7 @@ class CalendarService:
         end_time: str | None = None,
         description: str | None = None,
         location: str | None = None,
+        recurrence: list[str] | None = None,
         calendar_id: str = "primary",
     ) -> dict[str, Any]:
         """
@@ -169,6 +188,7 @@ class CalendarService:
             end_time: New end time in ISO format
             description: New event description
             location: New event location
+            recurrence: List of RRULE strings (e.g., ["RRULE:FREQ=DAILY"])
             calendar_id: Calendar ID (default: primary)
 
         Returns:
@@ -195,6 +215,8 @@ class CalendarService:
                 event["description"] = description
             if location is not None:
                 event["location"] = location
+            if recurrence is not None:
+                event["recurrence"] = recurrence
 
             updated = (
                 service.events()
@@ -208,6 +230,8 @@ class CalendarService:
                 "summary": updated.get("summary"),
                 "start": updated.get("start", {}).get("dateTime"),
                 "end": updated.get("end", {}).get("dateTime"),
+                "description": updated.get("description"),
+                "recurrence": updated.get("recurrence"),
                 "html_link": updated.get("htmlLink"),
             }
 

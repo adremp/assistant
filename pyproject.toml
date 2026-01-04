@@ -19,6 +19,8 @@ dependencies = [
     "pydantic-settings>=2.5.0",
     # Storage
     "redis>=5.0.0",
+    # Scheduler
+    "apscheduler>=4.0.0a6",
     "aiofiles>=24.1.0",
     # Future: PostgreSQL + pgvector for RAG
     # "asyncpg>=0.29.0",

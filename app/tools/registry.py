@@ -8,6 +8,8 @@ from redis.asyncio import Redis
 
 from app.tools.base import BaseTool
 from app.storage.tokens import TokenStorage
+from app.storage.reminders import ReminderStorage
+from app.scheduler.service import ReminderScheduler
 
 logger = logging.getLogger(__name__)
 
@@ -15,16 +17,26 @@ logger = logging.getLogger(__name__)
 class ToolRegistry:
     """Registry for LLM tools with lazy loading."""
 
-    def __init__(self, redis: Redis, token_storage: TokenStorage):
+    def __init__(
+        self,
+        redis: Redis,
+        token_storage: TokenStorage,
+        reminder_scheduler: ReminderScheduler | None = None,
+        reminder_storage: ReminderStorage | None = None,
+    ):
         """
         Initialize tool registry.
 
         Args:
             redis: Redis client for tools that need storage
             token_storage: Token storage for Google API tools
+            reminder_scheduler: Optional scheduler for reminder tools
+            reminder_storage: Optional storage for reminder tools
         """
         self.redis = redis
         self.token_storage = token_storage
+        self.reminder_scheduler = reminder_scheduler
+        self.reminder_storage = reminder_storage
         self._tools: dict[str, BaseTool] = {}
         self._loaded = False
 
@@ -42,6 +54,7 @@ class ToolRegistry:
         from app.tools.update_task import UpdateTaskTool
         from app.tools.complete_task import CompleteTaskTool
         from app.tools.respond_to_user import RespondToUserTool
+        from app.tools.create_reminder import CreateReminderTool
 
         tools = [
             # Calendar tools
@@ -56,6 +69,14 @@ class ToolRegistry:
             # Response tool
             RespondToUserTool(),
         ]
+        
+        # Add reminder tool if scheduler and storage are available
+        if self.reminder_scheduler and self.reminder_storage:
+            tools.append(CreateReminderTool(
+                token_storage=self.token_storage,
+                reminder_storage=self.reminder_storage,
+                reminder_scheduler=self.reminder_scheduler,
+            ))
 
         for tool in tools:
             self._tools[tool.name] = tool
@@ -127,19 +148,26 @@ class ToolRegistry:
 _registry: ToolRegistry | None = None
 
 
-def init_tool_registry(redis: Redis, token_storage: TokenStorage) -> ToolRegistry:
+def init_tool_registry(
+    redis: Redis,
+    token_storage: TokenStorage,
+    reminder_scheduler: ReminderScheduler | None = None,
+    reminder_storage: ReminderStorage | None = None,
+) -> ToolRegistry:
     """
     Initialize the global tool registry.
 
     Args:
         redis: Redis client
         token_storage: Token storage instance
+        reminder_scheduler: Optional reminder scheduler for reminder tools
+        reminder_storage: Optional reminder storage for reminder tools
 
     Returns:
         Initialized ToolRegistry
     """
     global _registry
-    _registry = ToolRegistry(redis, token_storage)
+    _registry = ToolRegistry(redis, token_storage, reminder_scheduler, reminder_storage)
     return _registry
 
 
