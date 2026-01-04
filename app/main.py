@@ -64,10 +64,9 @@ async def lifespan(app: FastAPI):
         reminder_storage=reminder_storage,
         pending_storage=pending_storage,
         token_storage=token_storage,
-        default_timezone=settings.default_timezone,
     )
     await reminder_scheduler.start()
-    logger.info(f"Reminder scheduler started (timezone: {settings.default_timezone})")
+    logger.info("Reminder scheduler started")
 
     # Initialize tool registry with scheduler and storage
     tool_registry = init_tool_registry(redis, token_storage, reminder_scheduler, reminder_storage)

@@ -36,9 +36,6 @@ class Settings(BaseSettings):
     conversation_ttl_seconds: int = 86400  # 24 hours
     token_ttl_seconds: int = 2592000  # 30 days
 
-    # Reminders / Scheduler
-    default_timezone: str = "Asia/Almaty"  # Default timezone for reminders
-
     # PostgreSQL + pgvector (future RAG)
     database_url: str | None = None
 

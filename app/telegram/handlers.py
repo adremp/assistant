@@ -365,7 +365,7 @@ async def handle_text_message(
     try:
         # Get response from LLM (may retry on rate limit)
         response = await _get_llm_response_with_rate_limit_handling(
-            message, llm_client, user_id, text
+            message, llm_client, user_id, text, token_storage
         )
         
         
@@ -389,6 +389,7 @@ async def _get_llm_response_with_rate_limit_handling(
     llm_client: LLMClient,
     user_id: int,
     text: str,
+    token_storage: TokenStorage | None = None,
     max_retries: int = 3,
 ) -> str:
     """
@@ -398,10 +399,16 @@ async def _get_llm_response_with_rate_limit_handling(
     """
     import asyncio
     from app.llm.retry import RateLimitException
-    
+    user_timezone = None
+    if token_storage:
+        try:
+            user_timezone = await token_storage.get_user_timezone(user_id)
+        except Exception as e:
+            logger.warning(f"Failed to get user timezone for {user_id}: {e}")
+
     for attempt in range(max_retries):
         try:
-            return await llm_client.chat(user_id, text)
+            return await llm_client.chat(user_id, text, user_timezone=user_timezone)
         except RateLimitException as e:
             if attempt < max_retries - 1:
                 await message.answer(
@@ -491,7 +498,7 @@ async def handle_voice_message(
         
         # Send transcribed text to LLM (will be saved to history as user message)
         response = await _get_llm_response_with_rate_limit_handling(
-            message, llm_client, user_id, transcribed_text
+            message, llm_client, user_id, transcribed_text, token_storage
         )
         
         # Send response
@@ -524,6 +531,7 @@ async def handle_oauth_code(
         llm_client: LLM client for clearing history
     """
     from app.google.auth import GoogleAuthService
+    from app.google.calendar import CalendarService
     from app.config import get_settings
 
     user_id = message.from_user.id if message.from_user else 0
@@ -534,6 +542,14 @@ async def handle_oauth_code(
         success = await auth_service.handle_callback(user_id, code)
         
         if success:
+            # Get user's timezone from Google Calendar
+            credentials = await auth_service.get_credentials(user_id)
+            if credentials:
+                calendar_service = CalendarService()
+                user_timezone = await calendar_service.get_user_timezone(credentials)
+                await token_storage.set_user_timezone(user_id, user_timezone)
+                logger.info(f"Saved user timezone: {user_timezone}")
+            
             # Clear chat history after successful auth
             await llm_client.clear_history(user_id)
             
@@ -623,5 +639,3 @@ async def handle_my_reminders_callback(
     await callback.answer()
     user_id = callback.from_user.id
     await show_user_reminders(callback.message, user_id, reminder_scheduler, edit=True)
-
-

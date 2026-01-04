@@ -87,8 +87,15 @@ class CreateCalendarEventTool(BaseTool):
             }
 
         try:
-            settings = get_settings()
-            
+            timezone = await self.calendar_service.get_user_timezone(credentials)
+            if not timezone:
+                return {
+                    "success": False,
+                    "error": "no_timezone",
+                    "message": "Не удалось получить часовой пояс из Google Calendar. Повтори авторизацию /auth.",
+                }
+            await self.token_storage.set_user_timezone(user_id, timezone)
+
             # Build recurrence rule from freq and freq_days
             recurrence: list[str] | None = None
             if freq and freq != "once":
@@ -106,7 +113,7 @@ class CreateCalendarEventTool(BaseTool):
                 end_time=end_time,
                 description=description,
                 recurrence=recurrence,
-                timezone=settings.default_timezone if recurrence else None,
+                timezone=timezone,
             )
 
             recurrence_msg = ""
@@ -128,4 +135,3 @@ class CreateCalendarEventTool(BaseTool):
                 "error": "api_error",
                 "message": f"Error creating event: {str(e)}",
             }
-

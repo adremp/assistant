@@ -27,6 +27,7 @@ dependencies = [
     # "pgvector>=0.3.0",
     # "sqlalchemy>=2.0.0",
     "fastapi-cli>=0.0.20",
+    "tzdata>=2025.3",
 ]
 
 [build-system]

@@ -121,9 +121,6 @@ class CreateReminderTool(BaseTool):
                 "message": f"Invalid time format: {time}. Use HH:MM format (e.g., '20:00').",
             }
 
-        settings = get_settings()
-        timezone = settings.default_timezone
-
         # Check Google auth
         credentials = await self.auth_service.get_credentials(user_id)
         if credentials is None:
@@ -131,6 +128,25 @@ class CreateReminderTool(BaseTool):
                 "success": False,
                 "error": "not_authorized",
                 "message": "User is not authorized in Google. Ask user to run /auth command.",
+            }
+
+        timezone = await self.calendar_service.get_user_timezone(credentials)
+        if not timezone:
+            return {
+                "success": False,
+                "error": "no_timezone",
+                "message": "Не удалось получить часовой пояс из Google Calendar. Повтори авторизацию /auth.",
+            }
+
+        await self.token_storage.set_user_timezone(user_id, timezone)
+
+        try:
+            tz = ZoneInfo(timezone)
+        except Exception:
+            return {
+                "success": False,
+                "error": "invalid_timezone",
+                "message": f"Некорректный часовой пояс из Google Calendar: {timezone}",
             }
 
         try:
@@ -150,7 +166,6 @@ class CreateReminderTool(BaseTool):
                 recurrence = [f"RRULE:FREQ=WEEKLY;BYDAY={day_code}"]
             
             # Calculate start/end times for today/next occurrence
-            tz = ZoneInfo(timezone)
             now = datetime.now(tz)
             start_dt = now.replace(hour=hour, minute=minute, second=0, microsecond=0)
             

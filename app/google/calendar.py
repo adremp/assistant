@@ -30,6 +30,27 @@ class CalendarService:
         """
         return build("calendar", "v3", credentials=credentials)
 
+    async def get_user_timezone(self, credentials: Credentials) -> str:
+        """
+        Get user's timezone from Google Calendar settings.
+
+        Args:
+            credentials: Valid Google credentials
+
+        Returns:
+            User's timezone string (e.g., "Asia/Almaty")
+        """
+        service = self._get_service(credentials)
+
+        try:
+            setting = service.settings().get(setting="timezone").execute()
+            timezone_value = setting.get("value", "UTC")
+            logger.debug(f"Got user timezone: {timezone_value}")
+            return timezone_value
+        except HttpError as e:
+            logger.error(f"Failed to get timezone: {e}")
+            return "UTC"
+
     async def list_events(
         self,
         credentials: Credentials,

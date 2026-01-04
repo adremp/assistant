@@ -15,6 +15,7 @@ from app.storage.reminders import ReminderStorage
 from app.storage.pending_responses import PendingResponseStorage
 from app.storage.tokens import TokenStorage
 from app.constants import REMINDER_TAG
+from app.utils.timezone import to_tzinfo
 
 logger = logging.getLogger(__name__)
 
@@ -29,7 +30,6 @@ class ReminderScheduler:
         reminder_storage: ReminderStorage,
         pending_storage: PendingResponseStorage,
         token_storage: TokenStorage,
-        default_timezone: str = "Asia/Almaty",
     ):
         """
         Initialize reminder scheduler.
@@ -40,14 +40,12 @@ class ReminderScheduler:
             reminder_storage: Storage for reminder data
             pending_storage: Storage for pending response tracking
             token_storage: Token storage for Google auth
-            default_timezone: Default timezone for reminders
         """
         self.redis_url = redis_url
         self.bot = bot
         self.reminder_storage = reminder_storage
         self.pending_storage = pending_storage
         self.token_storage = token_storage
-        self.default_timezone = default_timezone
         self.scheduler: AsyncScheduler | None = None
         self._running = False
 
@@ -74,7 +72,7 @@ class ReminderScheduler:
         # Schedule daily sync at midnight
         await self.scheduler.add_schedule(
             self._sync_from_calendar,
-            CronTrigger(hour=0, minute=0, timezone=self.default_timezone),
+            CronTrigger(hour=0, minute=0, timezone=ZoneInfo("UTC")),
             id="calendar_sync",
         )
         logger.info("Scheduled daily calendar sync at 00:00")
@@ -113,18 +111,27 @@ class ReminderScheduler:
         reminder_id = reminder["id"]
         schedule_type = reminder["schedule_type"]
         time_str = reminder["time"]
-        timezone = reminder.get("timezone", self.default_timezone)
+        timezone = reminder.get("timezone")
         weekday = reminder.get("weekday")
+
+        if not timezone:
+            logger.error(f"Reminder {reminder_id} missing timezone, skipping schedule")
+            return
 
         # Parse time (HH:MM format)
         hour, minute = map(int, time_str.split(":"))
+
+        tzinfo = to_tzinfo(timezone)
+        if tzinfo is None:
+            logger.error(f"Invalid timezone '{timezone}' for reminder {reminder_id}, skipping schedule")
+            return
 
         # Create cron trigger
         if schedule_type == "daily":
             trigger = CronTrigger(
                 hour=hour,
                 minute=minute,
-                timezone=timezone,
+                timezone=tzinfo,
             )
         elif schedule_type == "weekly":
             # APScheduler uses 0=Monday, 6=Sunday (same as our format)
@@ -132,7 +139,7 @@ class ReminderScheduler:
                 day_of_week=weekday,
                 hour=hour,
                 minute=minute,
-                timezone=timezone,
+                timezone=tzinfo,
             )
         else:
             raise ValueError(f"Unknown schedule type: {schedule_type}")
@@ -196,7 +203,7 @@ class ReminderScheduler:
             template: Reminder message template
             schedule_type: "daily" or "weekly"
             time: Time in HH:MM format
-            timezone: User's timezone (defaults to default_timezone)
+            timezone: User's timezone
             weekday: Day of week (0-6) for weekly reminders
 
         Returns:
@@ -206,7 +213,7 @@ class ReminderScheduler:
             raise RuntimeError("Scheduler not started")
 
         if timezone is None:
-            timezone = self.default_timezone
+            raise ValueError("timezone is required for reminders")
 
         # Validate schedule type
         if schedule_type not in ("daily", "weekly"):
@@ -339,6 +346,18 @@ class ReminderScheduler:
                     try:
                         start_dt = datetime.fromisoformat(start_str.replace("Z", "+00:00"))
                         time_str = start_dt.strftime("%H:%M")
+                        tzinfo = start_dt.tzinfo
+                        tz_offset = start_dt.utcoffset()
+                        if tzinfo and getattr(tzinfo, "key", None):
+                            timezone_value = tzinfo.key
+                        elif tz_offset is not None:
+                            total_minutes = int(tz_offset.total_seconds() // 60)
+                            hours, minutes = divmod(abs(total_minutes), 60)
+                            sign = "+" if total_minutes >= 0 else "-"
+                            timezone_value = f"{sign}{hours:02d}:{minutes:02d}"
+                        else:
+                            logger.warning(f"Event {event_id} missing timezone, skipping")
+                            continue
                     except (ValueError, AttributeError):
                         continue
                     
@@ -367,7 +386,7 @@ class ReminderScheduler:
                         template=template,
                         schedule_type=schedule_type,
                         time=time_str,
-                        timezone=self.default_timezone,
+                        timezone=timezone_value,
                         weekday=weekday,
                         calendar_event_id=event_id,
                     )

@@ -2,6 +2,7 @@
 
 import json
 import logging
+from datetime import datetime, timezone
 from typing import Any
 
 from openai import AsyncOpenAI
@@ -11,10 +12,11 @@ from app.config import Settings
 from app.llm.history import ConversationHistory
 from app.llm.retry import RetryHandler
 from app.tools.registry import ToolRegistry
+from app.utils.timezone import to_tzinfo
 
 logger = logging.getLogger(__name__)
 
-SYSTEM_PROMPT = """You are an assistant for managing Google Calendar and Tasks.
+SYSTEM_PROMPT_TEMPLATE = """You are an assistant for managing Google Calendar and Tasks.
 
 Capabilities:
 - Show events from Google Calendar
@@ -32,8 +34,12 @@ IMPORTANT - RESPONSE RULES:
 4. Then call respond_to_user with the final message
 
 IMPORTANT - TIMEZONE:
-- When creating events ALWAYS use the timezone from the message context
-- Time format: 2024-12-29T15:00:00+XX:XX (timezone offset is required!)
+- Current user timezone: {user_timezone}
+- Interpret any user-provided time (\"завтра в 10\", \"в пятницу\", \"через 2 часа\") strictly in the user's timezone. Never assume server timezone.
+- Store/submit times in ISO 8601 with offset: 2024-12-29T15:00:00+07:00 (offset required). Convert recurring events using the same timezone (with DST rules).
+- In replies include both local time with TZ and UTC conversion, e.g.: \"10:00 2024-05-10 Europe/Moscow (UTC+03:00 -> 07:00Z)\".
+- If the parsed local time is in the past relative to the user's \"now\", ask for clarification or propose the nearest future time.
+- Resolve ambiguous inputs: if only time is given, ask for date; if date without year, use the nearest future date and say which one.
 
 IMPORTANT - COMPLETED TASKS:
 - If user mentions completing a task that doesn't exist in their task list, create it with today's date and immediately mark it as completed
@@ -84,6 +90,7 @@ class LLMClient:
         user_id: int,
         message: str,
         include_datetime: bool = True,
+        user_timezone: str | None = None,
     ) -> str:
         """
         Send a message and get a response, handling tool calls.
@@ -92,14 +99,23 @@ class LLMClient:
             user_id: Telegram user ID
             message: User message
             include_datetime: Whether to include current datetime in message
+            user_timezone: Optional user timezone (IANA or offset) to inject into system prompt and context
 
         Returns:
             Assistant response text
         """
+        tz_name = user_timezone or "unknown"
+        system_prompt = SYSTEM_PROMPT_TEMPLATE.format(user_timezone=tz_name)
+
         # Add current datetime context with timezone
         if include_datetime:
-            from datetime import datetime
-            now = datetime.now().astimezone()  # Get local timezone automatically
+            tzinfo = to_tzinfo(tz_name)
+            if tzinfo is None:
+                logger.warning(f"Invalid timezone provided: {tz_name}, using UTC fallback")
+            if tzinfo:
+                now = datetime.now(tzinfo).astimezone(tzinfo)
+            else:
+                now = datetime.now(timezone.utc)
             tz_offset = now.strftime("%z")  # e.g., "+0500"
             tz_formatted = f"{tz_offset[:3]}:{tz_offset[3:]}"  # e.g., "+05:00"
             now_str = now.strftime("%Y-%m-%d %H:%M:%S %z")
@@ -110,8 +126,12 @@ class LLMClient:
         history = await self.history.get(user_id)
 
         # Ensure system message is set
-        if not history or history[0].get("role") != "system":
-            await self.history.set_system_message(user_id, SYSTEM_PROMPT)
+        if (
+            not history
+            or history[0].get("role") != "system"
+            or history[0].get("content") != system_prompt
+        ):
+            await self.history.set_system_message(user_id, system_prompt)
             history = await self.history.get(user_id)
 
         # Add user message
@@ -276,4 +296,3 @@ class LLMClient:
         """
         await self.history.clear(user_id)
         logger.info(f"Cleared conversation history for user {user_id}")
-

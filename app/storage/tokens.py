@@ -101,3 +101,34 @@ class TokenStorage:
         """
         key = self._make_key(user_id)
         return await self.redis.expire(key, self.ttl)
+
+    async def get_user_timezone(self, user_id: int, default: str | None = None) -> str | None:
+        """
+        Get user's timezone from stored token data.
+
+        Args:
+            user_id: Telegram user ID
+            default: Default timezone if not set
+
+        Returns:
+            User's timezone string
+        """
+        token_data = await self.load_token(user_id)
+        if token_data is None:
+            return default
+        return token_data.get("timezone", default)
+
+    async def set_user_timezone(self, user_id: int, timezone: str) -> None:
+        """
+        Set user's timezone in token data.
+
+        Args:
+            user_id: Telegram user ID
+            timezone: Timezone string (e.g., "Asia/Almaty")
+        """
+        token_data = await self.load_token(user_id)
+        if token_data is None:
+            return
+        token_data["timezone"] = timezone
+        await self.save_token(user_id, token_data)
+        logger.info(f"Saved timezone {timezone} for user {user_id}")
