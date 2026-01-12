@@ -12,6 +12,8 @@ from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKe
 from app.llm.client import LLMClient
 from app.storage.tokens import TokenStorage
 from app.storage.pending_responses import PendingResponseStorage
+from app.storage.pending_reminder_confirm import PendingReminderConfirmation
+from app.storage.reminders import ReminderStorage
 from app.scheduler.service import ReminderScheduler
 
 logger = logging.getLogger(__name__)
@@ -402,6 +404,25 @@ async def handle_text_message(
             message, llm_client, user_id, text, token_storage
         )
         
+        # Handle confirmation responses with buttons
+        if isinstance(response, dict) and response.get("type") == "needs_confirmation":
+            confirmation_id = response.get("confirmation_id", "")
+            msg_text = response.get("message", "Подтвердите действие")
+            
+            keyboard = InlineKeyboardMarkup(inline_keyboard=[
+                [
+                    InlineKeyboardButton(
+                        text="✅ Подтвердить",
+                        callback_data=f"confirm_reminder:{confirmation_id}"
+                    ),
+                    InlineKeyboardButton(
+                        text="❌ Отмена",
+                        callback_data=f"cancel_reminder:{confirmation_id}"
+                    ),
+                ]
+            ])
+            await message.answer(msg_text, reply_markup=keyboard)
+            return
         
         # Send response as plain text
         if len(response) > 4096:
@@ -673,3 +694,151 @@ async def handle_my_reminders_callback(
     await callback.answer()
     user_id = callback.from_user.id
     await show_user_reminders(callback.message, user_id, reminder_scheduler, edit=True)
+
+
+@router.callback_query(F.data.startswith("confirm_reminder:"))
+async def handle_confirm_reminder(
+    callback: CallbackQuery,
+    pending_confirm: PendingReminderConfirmation,
+    reminder_storage: ReminderStorage,
+    reminder_scheduler: ReminderScheduler,
+    token_storage: TokenStorage,
+) -> None:
+    """Handle reminder confirmation."""
+    from app.google.calendar import CalendarService
+    from app.google.auth import GoogleAuthService
+    from app.config import get_settings
+    from app.constants import REMINDER_TAG
+    from datetime import timedelta
+    from zoneinfo import ZoneInfo
+
+    await callback.answer("Создаю напоминание...")
+    
+    confirmation_id = callback.data.split(":")[1]
+    user_id = callback.from_user.id
+    
+    # Get pending data
+    pending_data = await pending_confirm.get_pending(confirmation_id)
+    if not pending_data:
+        await callback.message.edit_text("⚠️ Срок подтверждения истёк. Создайте напоминание заново.")
+        return
+    
+    # Verify user
+    if pending_data.get("user_id") != user_id:
+        await callback.message.answer("⚠️ Это подтверждение предназначено для другого пользователя.")
+        return
+    
+    settings = get_settings()
+    auth_service = GoogleAuthService(settings, token_storage)
+    calendar_service = CalendarService()
+    
+    credentials = await auth_service.get_credentials(user_id)
+    if not credentials:
+        await callback.message.edit_text("⚠️ Требуется авторизация. Выполните /auth")
+        return
+    
+    try:
+        template = pending_data["template"]
+        schedule_type = pending_data["schedule_type"]
+        time_str = pending_data["time"]
+        timezone = pending_data["timezone"]
+        weekday = pending_data.get("weekday")
+        summary = pending_data.get("summary")
+        
+        # Parse time
+        hour, minute = map(int, time_str.split(":"))
+        
+        # Create title
+        event_summary = summary or template[:50] + ("..." if len(template) > 50 else "")
+        
+        # Build description with tag
+        event_description = f"{REMINDER_TAG} {template}"
+        
+        # Build recurrence rule
+        if schedule_type == "daily":
+            recurrence = ["RRULE:FREQ=DAILY"]
+        else:
+            weekday_map = ["MO", "TU", "WE", "TH", "FR", "SA", "SU"]
+            day_code = weekday_map[weekday] if weekday is not None else "MO"
+            recurrence = [f"RRULE:FREQ=WEEKLY;BYDAY={day_code}"]
+        
+        # Calculate start/end times
+        tz = ZoneInfo(timezone)
+        now = datetime.now(tz)
+        start_dt = now.replace(hour=hour, minute=minute, second=0, microsecond=0)
+        
+        if start_dt <= now:
+            start_dt += timedelta(days=1)
+        
+        if schedule_type == "weekly" and weekday is not None:
+            days_ahead = weekday - start_dt.weekday()
+            if days_ahead <= 0:
+                days_ahead += 7
+            start_dt += timedelta(days=days_ahead)
+        
+        end_dt = start_dt + timedelta(minutes=15)
+        
+        # Create Google Calendar event
+        event = await calendar_service.create_event(
+            credentials=credentials,
+            summary=f"⏰ {event_summary}",
+            start_time=start_dt.isoformat(),
+            end_time=end_dt.isoformat(),
+            description=event_description,
+            recurrence=recurrence,
+            timezone=timezone,
+        )
+        
+        calendar_event_id = event.get("id", "")
+        
+        # Save to Redis
+        reminder_id = await reminder_storage.save_reminder(
+            user_id=user_id,
+            template=template,
+            schedule_type=schedule_type,
+            time=time_str,
+            timezone=timezone,
+            weekday=weekday,
+            calendar_event_id=calendar_event_id,
+        )
+        
+        # Schedule in APScheduler
+        reminder = await reminder_storage.get_reminder(reminder_id)
+        if reminder:
+            await reminder_scheduler._schedule_reminder(reminder)
+        
+        # Clean up
+        await pending_confirm.delete_pending(confirmation_id)
+        
+        weekdays = ["понедельник", "вторник", "среду", "четверг", "пятницу", "субботу", "воскресенье"]
+        if schedule_type == "daily":
+            schedule_desc = f"ежедневно в {time_str}"
+        else:
+            day_name = weekdays[weekday] if weekday is not None else "?"
+            schedule_desc = f"каждый {day_name} в {time_str}"
+        
+        await callback.message.edit_text(
+            f"✅ Напоминание создано!\n\n"
+            f"📝 {template}\n"
+            f"⏰ {schedule_desc}\n"
+            f"🌍 {timezone}"
+        )
+        
+    except Exception as e:
+        logger.error(f"Error creating reminder: {e}")
+        await callback.message.edit_text(f"⚠️ Ошибка при создании напоминания: {str(e)}")
+
+
+@router.callback_query(F.data.startswith("cancel_reminder:"))
+async def handle_cancel_reminder(
+    callback: CallbackQuery,
+    pending_confirm: PendingReminderConfirmation,
+) -> None:
+    """Handle reminder cancellation."""
+    await callback.answer("Отменено")
+    
+    confirmation_id = callback.data.split(":")[1]
+    await pending_confirm.delete_pending(confirmation_id)
+    
+    await callback.message.edit_text("❌ Создание напоминания отменено.")
+

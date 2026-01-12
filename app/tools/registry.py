@@ -8,8 +8,7 @@ from redis.asyncio import Redis
 
 from app.tools.base import BaseTool
 from app.storage.tokens import TokenStorage
-from app.storage.reminders import ReminderStorage
-from app.scheduler.service import ReminderScheduler
+from app.storage.pending_reminder_confirm import PendingReminderConfirmation
 
 logger = logging.getLogger(__name__)
 
@@ -21,8 +20,7 @@ class ToolRegistry:
         self,
         redis: Redis,
         token_storage: TokenStorage,
-        reminder_scheduler: ReminderScheduler | None = None,
-        reminder_storage: ReminderStorage | None = None,
+        pending_confirm: PendingReminderConfirmation | None = None,
     ):
         """
         Initialize tool registry.
@@ -30,13 +28,11 @@ class ToolRegistry:
         Args:
             redis: Redis client for tools that need storage
             token_storage: Token storage for Google API tools
-            reminder_scheduler: Optional scheduler for reminder tools
-            reminder_storage: Optional storage for reminder tools
+            pending_confirm: Optional storage for reminder confirmations
         """
         self.redis = redis
         self.token_storage = token_storage
-        self.reminder_scheduler = reminder_scheduler
-        self.reminder_storage = reminder_storage
+        self.pending_confirm = pending_confirm
         self._tools: dict[str, BaseTool] = {}
         self._loaded = False
 
@@ -70,12 +66,11 @@ class ToolRegistry:
             RespondToUserTool(),
         ]
         
-        # Add reminder tool if scheduler and storage are available
-        if self.reminder_scheduler and self.reminder_storage:
+        # Add reminder tool if pending_confirm available
+        if self.pending_confirm:
             tools.append(CreateReminderTool(
                 token_storage=self.token_storage,
-                reminder_storage=self.reminder_storage,
-                reminder_scheduler=self.reminder_scheduler,
+                pending_confirm=self.pending_confirm,
             ))
 
         for tool in tools:
@@ -151,8 +146,7 @@ _registry: ToolRegistry | None = None
 def init_tool_registry(
     redis: Redis,
     token_storage: TokenStorage,
-    reminder_scheduler: ReminderScheduler | None = None,
-    reminder_storage: ReminderStorage | None = None,
+    pending_confirm: PendingReminderConfirmation | None = None,
 ) -> ToolRegistry:
     """
     Initialize the global tool registry.
@@ -160,14 +154,13 @@ def init_tool_registry(
     Args:
         redis: Redis client
         token_storage: Token storage instance
-        reminder_scheduler: Optional reminder scheduler for reminder tools
-        reminder_storage: Optional reminder storage for reminder tools
+        pending_confirm: Optional storage for reminder confirmations
 
     Returns:
         Initialized ToolRegistry
     """
     global _registry
-    _registry = ToolRegistry(redis, token_storage, reminder_scheduler, reminder_storage)
+    _registry = ToolRegistry(redis, token_storage, pending_confirm)
     return _registry
 
 

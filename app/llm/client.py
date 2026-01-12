@@ -252,6 +252,15 @@ class LLMClient:
                         await self.history.append(user_id, {"role": "assistant", "content": user_response})
                         return user_response
                     
+                    # Special handling for tools that need user confirmation
+                    if result.get("needs_confirmation") and result.get("confirmation_id"):
+                        # Return structured response for handler to add buttons
+                        return {
+                            "type": "needs_confirmation",
+                            "confirmation_id": result["confirmation_id"],
+                            "message": result.get("message", "Подтвердите действие"),
+                        }
+                    
                     result_str = json.dumps(result, ensure_ascii=False)
                 except Exception as e:
                     logger.error(f"Tool {tool_name} failed: {e}")

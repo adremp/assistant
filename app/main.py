@@ -10,6 +10,7 @@ from app.config import get_settings
 from app.storage.tokens import TokenStorage
 from app.storage.reminders import ReminderStorage
 from app.storage.pending_responses import PendingResponseStorage
+from app.storage.pending_reminder_confirm import PendingReminderConfirmation
 from app.scheduler.service import ReminderScheduler
 from app.llm.client import LLMClient
 from app.llm.history import ConversationHistory
@@ -68,8 +69,11 @@ async def lifespan(app: FastAPI):
     await reminder_scheduler.start()
     logger.info("Reminder scheduler started")
 
-    # Initialize tool registry with scheduler and storage
-    tool_registry = init_tool_registry(redis, token_storage, reminder_scheduler, reminder_storage)
+    # Initialize pending reminder confirmation storage
+    pending_confirm = PendingReminderConfirmation(redis)
+
+    # Initialize tool registry with pending_confirm
+    tool_registry = init_tool_registry(redis, token_storage, pending_confirm)
     logger.info(f"Loaded tools: {tool_registry.tool_names}")
 
     # Initialize LLM client
@@ -92,6 +96,8 @@ async def lifespan(app: FastAPI):
     dp.workflow_data["tool_registry"] = tool_registry
     dp.workflow_data["reminder_scheduler"] = reminder_scheduler
     dp.workflow_data["pending_storage"] = pending_storage
+    dp.workflow_data["pending_confirm"] = pending_confirm
+    dp.workflow_data["reminder_storage"] = reminder_storage
 
     # Store in app state
     app.state.redis = redis
