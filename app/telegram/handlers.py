@@ -73,8 +73,42 @@ async def handle_help(message: Message) -> None:
         "/auth — авторизация в Google\n"
         "/tasks — задачи на сегодня\n"
         "/reminders — мои напоминания\n"
+        "/timezone — обновить часовой пояс\n"
         "/clear — очистить историю диалога"
     )
+
+
+@router.message(Command("timezone"))
+async def cmd_timezone(message: Message, token_storage: TokenStorage) -> None:
+    """Update user timezone from Google Calendar settings."""
+    from app.google.auth import GoogleAuthService
+    from app.google.calendar import CalendarService
+    from app.config import get_settings
+
+    user_id = message.from_user.id if message.from_user else 0
+    settings = get_settings()
+    auth_service = GoogleAuthService(settings, token_storage)
+    
+    credentials = await auth_service.get_credentials(user_id)
+    if not credentials:
+        await message.answer(
+            "⚠️ Требуется авторизация в Google.\n"
+            "Выполните /auth для авторизации."
+        )
+        return
+    
+    try:
+        calendar_service = CalendarService()
+        user_timezone = await calendar_service.get_user_timezone(credentials)
+        await token_storage.set_user_timezone(user_id, user_timezone)
+        
+        await message.answer(
+            f"✅ Часовой пояс обновлён\n\n"
+            f"🌍 Текущий часовой пояс: **{user_timezone}**"
+        )
+    except Exception as e:
+        logger.error(f"Timezone update error: {e}")
+        await message.answer("⚠️ Ошибка при обновлении часового пояса.")
 
 
 @router.message(Command("tasks"))
