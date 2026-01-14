@@ -4,15 +4,42 @@ on:
   push:
     branches:
       - master
+  pull_request:
+    branches:
+      - master
   workflow_dispatch:
 
 env:
   DOCKER_IMAGE: ${{ secrets.DOCKER_USERNAME }}/assistant
 
 jobs:
+  # LLM Code Review on Pull Requests
+  llm-review:
+    name: LLM Code Review
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request'
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+
+      - name: Run LLM Review
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          LLM_API_KEY: ${{ secrets.LLM_API_KEY }}
+          LLM_BASE_URL: ${{ secrets.LLM_BASE_URL }}
+          LLM_MODEL: ${{ secrets.LLM_MODEL }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: node .github/scripts/llm-review.js
+
   build-and-push:
     name: Build and Push to Docker Hub
     runs-on: ubuntu-latest
+    if: github.event_name == 'push' && github.ref == 'refs/heads/master'
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -40,6 +67,7 @@ jobs:
   deploy:
     name: Deploy to VPS
     runs-on: ubuntu-latest
+    if: github.event_name == 'push' && github.ref == 'refs/heads/master'
     needs: build-and-push
     steps:
       - name: Checkout
@@ -91,3 +119,4 @@ jobs:
           sleep 30
           curl -f http://${{ secrets.VPS_HOST }}:8000/health || echo "Health check failed"
         continue-on-error: true
+
