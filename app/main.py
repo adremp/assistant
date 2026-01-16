@@ -164,3 +164,87 @@ async def root():
         "version": "0.1.0",
         "status": "running",
     }
+
+
+@app.get("/oauth/callback")
+async def oauth_callback(code: str = "", state: str = "", error: str = ""):
+    """
+    Handle Google OAuth2 callback.
+    
+    Google redirects here after user authorizes (or denies).
+    We exchange the code for tokens and notify the user via Telegram.
+    """
+    from fastapi.responses import HTMLResponse
+    from app.google.auth import GoogleAuthService
+    
+    settings = get_settings()
+    token_storage: TokenStorage = app.state.redis and TokenStorage(
+        app.state.redis, settings.token_ttl_seconds
+    )
+    
+    if error:
+        logger.warning(f"OAuth error: {error}")
+        return HTMLResponse(
+            content=f"""
+            <html>
+            <body style="font-family: sans-serif; text-align: center; padding: 50px;">
+                <h1>❌ Ошибка авторизации</h1>
+                <p>{error}</p>
+                <p>Вернитесь в Telegram и попробуйте снова.</p>
+            </body>
+            </html>
+            """,
+            status_code=400,
+        )
+    
+    if not code or not state:
+        return HTMLResponse(
+            content="""
+            <html>
+            <body style="font-family: sans-serif; text-align: center; padding: 50px;">
+                <h1>⚠️ Недостаточно данных</h1>
+                <p>Отсутствует код авторизации.</p>
+            </body>
+            </html>
+            """,
+            status_code=400,
+        )
+    
+    auth_service = GoogleAuthService(settings, token_storage)
+    success, user_id = await auth_service.handle_callback(code, state)
+    
+    if success and user_id:
+        # Notify user via Telegram
+        try:
+            bot = app.state.bot
+            await bot.send_message(
+                user_id,
+                "✅ Авторизация в Google успешна!\n\n"
+                "Теперь вы можете использовать календарь и задачи."
+            )
+        except Exception as e:
+            logger.error(f"Failed to notify user {user_id}: {e}")
+        
+        return HTMLResponse(
+            content="""
+            <html>
+            <body style="font-family: sans-serif; text-align: center; padding: 50px;">
+                <h1>✅ Авторизация успешна!</h1>
+                <p>Можете закрыть эту страницу и вернуться в Telegram.</p>
+                <script>setTimeout(() => window.close(), 2000);</script>
+            </body>
+            </html>
+            """
+        )
+    else:
+        return HTMLResponse(
+            content="""
+            <html>
+            <body style="font-family: sans-serif; text-align: center; padding: 50px;">
+                <h1>❌ Ошибка авторизации</h1>
+                <p>Не удалось обработать код. Попробуйте снова в Telegram.</p>
+            </body>
+            </html>
+            """,
+            status_code=400,
+        )

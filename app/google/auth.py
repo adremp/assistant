@@ -16,7 +16,7 @@ logger = logging.getLogger(__name__)
 
 
 class GoogleAuthService:
-    """Service for Google OAuth2 authentication."""
+    """Service for Google OAuth2 authentication with web redirect."""
 
     SCOPES = [
         "https://www.googleapis.com/auth/calendar.readonly",
@@ -24,9 +24,6 @@ class GoogleAuthService:
         "https://www.googleapis.com/auth/tasks.readonly",
         "https://www.googleapis.com/auth/tasks",
     ]
-
-    # OOB redirect URI for desktop/mobile clients
-    REDIRECT_URI = "urn:ietf:wg:oauth:2.0:oob"
 
     def __init__(self, settings: Settings, token_storage: TokenStorage):
         """
@@ -59,6 +56,13 @@ class GoogleAuthService:
                 self._client_config = config
         return self._client_config
 
+    @property
+    def redirect_uri(self) -> str:
+        """Get redirect URI for OAuth callback."""
+        if not self.settings.google_redirect_uri:
+            raise ValueError("GOOGLE_REDIRECT_URI not configured")
+        return self.settings.google_redirect_uri
+
     def _create_flow(self) -> Flow:
         """Create a new OAuth2 flow."""
         credentials_path = self.settings.google_credentials_path
@@ -71,7 +75,7 @@ class GoogleAuthService:
         return Flow.from_client_secrets_file(
             str(credentials_path),
             scopes=self.SCOPES,
-            redirect_uri=self.REDIRECT_URI,
+            redirect_uri=self.redirect_uri,
         )
 
     async def get_credentials(self, user_id: int) -> Credentials | None:
@@ -144,27 +148,37 @@ class GoogleAuthService:
         """
         flow = self._create_flow()
 
+        # Include state with user_id for callback identification
+        state = str(user_id)
+
         auth_url, _ = flow.authorization_url(
             access_type="offline",
             include_granted_scopes="true",
             prompt="consent",
+            state=state,
         )
 
         logger.debug(f"Generated auth URL for user {user_id}")
         return auth_url
 
-    async def handle_callback(self, user_id: int, code: str) -> bool:
+    async def handle_callback(self, code: str, state: str | None = None) -> tuple[bool, int | None]:
         """
         Handle OAuth2 callback with authorization code.
 
         Args:
-            user_id: Telegram user ID
             code: Authorization code from callback
+            state: State parameter containing user_id
 
         Returns:
-            True if authentication successful
+            Tuple of (success, user_id)
         """
         try:
+            # Extract user_id from state
+            user_id = int(state) if state else None
+            if user_id is None:
+                logger.error("No user_id in OAuth state")
+                return False, None
+
             # Create a fresh flow and exchange code for token
             flow = self._create_flow()
             flow.fetch_token(code=code)
@@ -173,11 +187,11 @@ class GoogleAuthService:
             # Save token to Redis with client info
             await self._save_credentials(user_id, creds)
             logger.info(f"User {user_id} authorized successfully")
-            return True
+            return True, user_id
 
         except Exception as e:
-            logger.error(f"Failed to handle callback for user {user_id}: {e}")
-            return False
+            logger.error(f"Failed to handle callback: {e}")
+            return False, None
 
     async def revoke_access(self, user_id: int) -> bool:
         """

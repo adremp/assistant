@@ -26,6 +26,7 @@ class Settings(BaseSettings):
 
     # Google OAuth2
     google_credentials_path: Path = Path("credentials.json")
+    google_redirect_uri: str | None = None  # e.g. https://your-domain.com/oauth/callback
 
     # LLM Provider (OpenAI-compatible: Grok, OpenAI, etc.)
     llm_api_key: str
