@@ -10,6 +10,9 @@ services:
       - TELEGRAM_WEBHOOK_URL=${TELEGRAM_WEBHOOK_URL}
       - TELEGRAM_WEBHOOK_SECRET=${TELEGRAM_WEBHOOK_SECRET}
       - GOOGLE_CREDENTIALS_PATH=/app/credentials.json
+      - GOOGLE_REDIRECT_URI=${GOOGLE_REDIRECT_URI}
+      - telethon_api_id=${telethon_api_id}
+      - telethon_api_hash=${telethon_api_hash}
       - LLM_API_KEY=${LLM_API_KEY}
       - LLM_BASE_URL=${LLM_BASE_URL:-https://api.x.ai/v1}
       - LLM_MODEL=${LLM_MODEL:-grok-3}
