@@ -276,6 +276,12 @@ async def handle_auth(message: Message, token_storage: TokenStorage) -> None:
             "⚠️ Файл credentials.json не найден.\n"
             "Обратитесь к администратору бота."
         )
+    except ValueError as e:
+        logger.error(f"Auth config error: {e}")
+        await message.answer(
+            "⚠️ Google OAuth не настроен.\n"
+            "Требуется GOOGLE_REDIRECT_URI в .env"
+        )
     except Exception as e:
         logger.error(f"Auth error for user {user_id}: {e}")
         await message.answer("⚠️ Ошибка авторизации. Попробуйте позже.")
