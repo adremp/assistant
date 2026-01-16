@@ -15,10 +15,14 @@ class Settings(BaseSettings):
         extra="ignore",
     )
 
-    # Telegram
+    # Telegram Bot
     telegram_bot_token: str
     telegram_webhook_url: str | None = None
     telegram_webhook_secret: str | None = None
+
+    # Telethon (MTProto for channel history - per-user sessions)
+    telethon_api_id: int | None = None
+    telethon_api_hash: str | None = None
 
     # Google OAuth2
     google_credentials_path: Path = Path("credentials.json")
@@ -30,6 +34,7 @@ class Settings(BaseSettings):
     llm_temperature: float = 0.7
     llm_max_retries: int = 3
     llm_timeout: float = 30.0
+    llm_tpm_limit: int = 100000  # Tokens per minute limit for chunking
 
     # Redis (conversation history + OAuth2 tokens)
     redis_url: str = "redis://localhost:6379/0"
@@ -44,3 +49,4 @@ class Settings(BaseSettings):
 def get_settings() -> Settings:
     """Get cached settings instance."""
     return Settings()
+

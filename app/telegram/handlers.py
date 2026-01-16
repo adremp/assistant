@@ -14,6 +14,7 @@ from app.storage.tokens import TokenStorage
 from app.storage.pending_responses import PendingResponseStorage
 from app.storage.pending_reminder_confirm import PendingReminderConfirmation
 from app.storage.reminders import ReminderStorage
+from app.storage.summary_groups import SummaryGroupStorage
 from app.scheduler.service import ReminderScheduler
 
 logger = logging.getLogger(__name__)
@@ -27,6 +28,7 @@ def get_main_keyboard() -> InlineKeyboardMarkup:
         [InlineKeyboardButton(text="📋 Задачи на сегодня", callback_data="tasks_today")],
         [InlineKeyboardButton(text="📅 События на сегодня", callback_data="events_today")],
         [InlineKeyboardButton(text="⏰ Мои напоминания", callback_data="my_reminders")],
+        [InlineKeyboardButton(text="📊 Сводки", callback_data="summaries_menu")],
     ])
 
 
@@ -73,6 +75,9 @@ async def handle_help(message: Message) -> None:
         "Команды:\n"
         "/start — начать работу\n"
         "/auth — авторизация в Google\n"
+        "/notion_setup — настройка Notion\n"
+        "/telethon_auth — авторизация для каналов\n"
+        "/summaries — сводки\n"
         "/tasks — задачи на сегодня\n"
         "/reminders — мои напоминания\n"
         "/timezone — обновить часовой пояс\n"
@@ -302,6 +307,307 @@ async def handle_clear(message: Message, llm_client: LLMClient) -> None:
     await message.answer("🗑 История диалога очищена.")
 
 
+# Notion setup state storage
+_notion_setup_state: dict[int, dict] = {}
+
+
+@router.message(Command("notion_setup"))
+async def handle_notion_setup(
+    message: Message,
+    token_storage: TokenStorage,
+) -> None:
+    """Handle /notion_setup command - configure per-user Notion integration."""
+    user_id = message.from_user.id if message.from_user else 0
+    
+    # Check if already configured
+    existing_token = await token_storage.get_notion_token(user_id)
+    
+    if existing_token:
+        await message.answer(
+            "📝 Notion уже настроен!\n\n"
+            "Хотите изменить настройки?",
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="🔄 Перенастроить", callback_data="notion_reconfigure")],
+                [InlineKeyboardButton(text="🗑 Удалить интеграцию", callback_data="notion_clear")],
+            ]),
+        )
+        return
+    
+    # Start setup
+    _notion_setup_state[user_id] = {
+        "step": "token",
+    }
+    
+    await message.answer(
+        "📝 Настройка Notion (персональная)\n\n"
+        "1. Создайте интеграцию: https://www.notion.so/my-integrations\n"
+        "2. Скопируйте Internal Integration Token\n"
+        "3. Отправьте токен сюда\n\n"
+        "⚠️ Токен будет привязан только к вашему аккаунту."
+    )
+
+
+@router.callback_query(F.data == "notion_reconfigure")
+async def handle_notion_reconfigure(callback: CallbackQuery) -> None:
+    """Start Notion reconfiguration."""
+    await callback.answer()
+    user_id = callback.from_user.id
+    
+    _notion_setup_state[user_id] = {"step": "token"}
+    
+    await callback.message.edit_text(
+        "📝 Перенастройка Notion\n\n"
+        "Отправьте новый токен интеграции:"
+    )
+
+
+@router.callback_query(F.data == "notion_clear")
+async def handle_notion_clear(
+    callback: CallbackQuery,
+    token_storage: TokenStorage,
+) -> None:
+    """Clear Notion integration."""
+    await callback.answer("Интеграция удалена")
+    user_id = callback.from_user.id
+    
+    # Clear tokens
+    token_data = await token_storage.load_token(user_id)
+    if token_data:
+        token_data.pop("notion_token", None)
+        token_data.pop("notion_parent_page_id", None)
+        token_data.pop("notion_completed_tasks_page_id", None)
+        await token_storage.save_token(user_id, token_data)
+    
+    await callback.message.edit_text("✅ Интеграция с Notion удалена.")
+
+
+async def process_notion_setup_input(
+    message: Message,
+    token_storage: TokenStorage,
+) -> bool:
+    """Process text input during Notion setup."""
+    user_id = message.from_user.id if message.from_user else 0
+    state = _notion_setup_state.get(user_id)
+    
+    if not state:
+        return False
+    
+    text = message.text.strip() if message.text else ""
+    
+    if state["step"] == "token":
+        # Validate token format
+        if not text.startswith("secret_") or len(text) < 20:
+            await message.answer(
+                "⚠️ Токен должен начинаться с 'secret_'\n"
+                "Попробуйте скопировать ещё раз."
+            )
+            return True
+        
+        state["token"] = text
+        state["step"] = "parent_page"
+        
+        await message.answer(
+            "✅ Токен принят!\n\n"
+            "Теперь создайте страницу для сохранения сводок:\n"
+            "1. Создайте новую страницу в Notion\n"
+            "2. Дайте интеграции доступ к этой странице\n"
+            "3. Скопируйте ID страницы из URL\n\n"
+            "Пример URL:\n"
+            "notion.so/My-Page-**abc123def456**\n\n"
+            "Отправьте ID страницы:"
+        )
+        return True
+    
+    elif state["step"] == "parent_page":
+        # Clean page ID (remove hyphens and take last part if full URL)
+        page_id = text.replace("-", "").strip()
+        if "/" in page_id:
+            page_id = page_id.split("/")[-1].split("-")[-1]
+        
+        if len(page_id) < 20:
+            await message.answer(
+                "⚠️ ID страницы слишком короткий.\n"
+                "Скопируйте ID из URL страницы в Notion."
+            )
+            return True
+        
+        # Save configuration
+        await token_storage.set_notion_token(user_id, state["token"])
+        await token_storage.set_notion_parent_page_id(user_id, page_id)
+        
+        del _notion_setup_state[user_id]
+        
+        await message.answer(
+            "✅ Notion настроен!\n\n"
+            "Теперь сводки по выполненным задачам будут сохраняться\n"
+            "в вашу персональную страницу Notion."
+        )
+        return True
+    
+    return False
+
+
+# Telethon auth state storage
+_telethon_auth_state: dict[int, dict] = {}
+
+
+@router.message(Command("telethon_auth"))
+async def handle_telethon_auth(
+    message: Message,
+    token_storage: TokenStorage,
+) -> None:
+    """Handle /telethon_auth command - initiate per-user Telethon authorization."""
+    from app.telegram.telethon_service import TelethonService
+    from app.config import get_settings
+    
+    user_id = message.from_user.id if message.from_user else 0
+    settings = get_settings()
+    
+    # Load user's existing session
+    session_string = await token_storage.get_telethon_session(user_id)
+    telethon_service = TelethonService(settings, session_string)
+    
+    if not telethon_service.is_configured:
+        await message.answer(
+            "⚠️ Telethon не настроен.\n\n"
+            "Администратор должен добавить TELETHON_API_ID и TELETHON_API_HASH.\n"
+            "Получить можно на https://my.telegram.org/apps"
+        )
+        return
+    
+    if session_string and await telethon_service.is_authorized():
+        await message.answer(
+            "✅ Вы уже авторизованы в Telethon!\n\n"
+            "Можете использовать функцию сводок.",
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="🔄 Переавторизоваться", callback_data="telethon_reauth")],
+            ]),
+        )
+        return
+    
+    # Initialize auth state (we'll create service per message to maintain session)
+    _telethon_auth_state[user_id] = {
+        "step": "phone",
+        "phone": None,
+        "phone_code_hash": None,
+        "service": telethon_service,  # Keep service instance for session continuity
+    }
+    
+    await message.answer(
+        "🔐 Авторизация Telethon (персональная)\n\n"
+        "Ваша сессия будет привязана только к вашему аккаунту.\n\n"
+        "Введите номер телефона в формате +79001234567:"
+    )
+
+
+@router.callback_query(F.data == "telethon_reauth")
+async def handle_telethon_reauth(
+    callback: CallbackQuery,
+    token_storage: TokenStorage,
+) -> None:
+    """Clear session and restart auth."""
+    await callback.answer()
+    user_id = callback.from_user.id
+    
+    await token_storage.clear_telethon_session(user_id)
+    
+    # Show auth prompt
+    _telethon_auth_state[user_id] = {
+        "step": "phone",
+        "phone": None,
+        "phone_code_hash": None,
+        "service": None,  # Will create fresh
+    }
+    
+    await callback.message.edit_text(
+        "🔐 Переавторизация Telethon\n\n"
+        "Введите номер телефона в формате +79001234567:"
+    )
+
+
+async def process_telethon_auth_input(
+    message: Message,
+    token_storage: TokenStorage,
+) -> bool:
+    """
+    Process text input during Telethon auth.
+    
+    Returns True if handled, False otherwise.
+    """
+    from app.telegram.telethon_service import TelethonService
+    from app.config import get_settings
+    
+    user_id = message.from_user.id if message.from_user else 0
+    state = _telethon_auth_state.get(user_id)
+    
+    if not state:
+        return False
+    
+    text = message.text.strip() if message.text else ""
+    settings = get_settings()
+    
+    # Get or create service
+    telethon_service = state.get("service")
+    if telethon_service is None:
+        telethon_service = TelethonService(settings)
+        state["service"] = telethon_service
+    
+    if state["step"] == "phone":
+        # Validate phone format
+        if not text.startswith("+") or len(text) < 10:
+            await message.answer(
+                "⚠️ Неверный формат номера.\n"
+                "Введите номер в формате +79001234567:"
+            )
+            return True
+        
+        try:
+            phone_code_hash = await telethon_service.send_code(text)
+            state["phone"] = text
+            state["phone_code_hash"] = phone_code_hash
+            state["step"] = "code"
+            
+            await message.answer(
+                "✅ Код отправлен!\n\n"
+                "Введите код из SMS или Telegram:"
+            )
+        except Exception as e:
+            logger.error(f"Telethon send_code failed: {e}")
+            await message.answer(f"⚠️ Ошибка отправки кода: {str(e)[:100]}")
+            del _telethon_auth_state[user_id]
+        
+        return True
+    
+    elif state["step"] == "code":
+        try:
+            session_string = await telethon_service.sign_in(
+                state["phone"],
+                text,
+                state["phone_code_hash"],
+            )
+            
+            del _telethon_auth_state[user_id]
+            
+            if session_string:
+                # Save session to user's storage
+                await token_storage.set_telethon_session(user_id, session_string)
+                await message.answer(
+                    "✅ Telethon авторизован!\n\n"
+                    "Ваша персональная сессия сохранена.\n"
+                    "Теперь вы можете использовать функцию сводок (/summaries)."
+                )
+            else:
+                await message.answer("⚠️ Ошибка авторизации. Попробуйте снова (/telethon_auth).")
+        except Exception as e:
+            logger.error(f"Telethon sign_in failed: {e}")
+            await message.answer(f"⚠️ Ошибка авторизации: {str(e)[:100]}")
+            del _telethon_auth_state[user_id]
+        
+        return True
+    
+    return False
+
+
 @router.message(Command("reminders"))
 async def handle_reminders_command(
     message: Message,
@@ -365,6 +671,7 @@ async def handle_text_message(
     llm_client: LLMClient,
     token_storage: TokenStorage,
     pending_storage: PendingResponseStorage,
+    summary_group_storage: SummaryGroupStorage,
 ) -> None:
     """
     Handle all text messages - check for pending reminder or send to LLM.
@@ -374,6 +681,7 @@ async def handle_text_message(
         llm_client: LLM client from workflow_data
         token_storage: Token storage from workflow_data
         pending_storage: Pending response storage
+        summary_group_storage: Summary group storage
     """
     if not message.text:
         return
@@ -384,6 +692,18 @@ async def handle_text_message(
     # Check if this is an OAuth code (starts with 4/)
     if text.startswith("4/"):
         await handle_oauth_code(message, text, token_storage, llm_client)
+        return
+
+    # Check for Telethon auth state
+    if await process_telethon_auth_input(message, token_storage):
+        return
+
+    # Check for Notion setup state
+    if await process_notion_setup_input(message, token_storage):
+        return
+
+    # Check for summary creation state
+    if await process_summary_creation_input(message, summary_group_storage):
         return
 
     # Check for pending reminder response
@@ -841,4 +1161,746 @@ async def handle_cancel_reminder(
     await pending_confirm.delete_pending(confirmation_id)
     
     await callback.message.edit_text("❌ Создание напоминания отменено.")
+
+
+# ==================== SUMMARY HANDLERS ====================
+
+
+@router.message(Command("summaries"))
+async def handle_summaries_command(
+    message: Message,
+    summary_group_storage: SummaryGroupStorage,
+) -> None:
+    """Handle /summaries command - show summary groups menu."""
+    user_id = message.from_user.id if message.from_user else 0
+    await show_summaries_menu(message, user_id, summary_group_storage)
+
+
+@router.callback_query(F.data == "summaries_menu")
+async def handle_summaries_menu_callback(
+    callback: CallbackQuery,
+    summary_group_storage: SummaryGroupStorage,
+) -> None:
+    """Handle summaries menu button click."""
+    await callback.answer()
+    user_id = callback.from_user.id
+    await show_summaries_menu(callback.message, user_id, summary_group_storage, edit=True)
+
+
+async def show_summaries_menu(
+    message: Message,
+    user_id: int,
+    summary_group_storage: SummaryGroupStorage,
+    edit: bool = False,
+) -> None:
+    """Show summary groups menu."""
+    groups = await summary_group_storage.get_user_groups(user_id)
+    
+    buttons = []
+    
+    if groups:
+        text = "📊 Ваши группы сводок:\n\n"
+        for group in groups:
+            group_id = group.get("id", "")
+            name = group.get("name", "Без названия")
+            channels_count = len(group.get("channel_ids", []))
+            text += f"• {name} ({channels_count} каналов)\n"
+            buttons.append([
+                InlineKeyboardButton(
+                    text=f"📄 {name}",
+                    callback_data=f"run_summary:{group_id}",
+                ),
+                InlineKeyboardButton(
+                    text="✏️",
+                    callback_data=f"edit_summary:{group_id}",
+                ),
+                InlineKeyboardButton(
+                    text="🗑",
+                    callback_data=f"delete_summary:{group_id}",
+                ),
+            ])
+    else:
+        text = "📊 Сводки\n\nУ вас пока нет групп сводок."
+    
+    # Static completed tasks button
+    buttons.append([
+        InlineKeyboardButton(text="✅ Выполненные задачи", callback_data="completed_tasks_summary")
+    ])
+    buttons.append([
+        InlineKeyboardButton(text="➕ Создать группу", callback_data="create_summary_group")
+    ])
+    buttons.append([
+        InlineKeyboardButton(text="🔙 Назад", callback_data="back_to_main")
+    ])
+    
+    keyboard = InlineKeyboardMarkup(inline_keyboard=buttons)
+    
+    if edit and message:
+        try:
+            await message.edit_text(text, reply_markup=keyboard)
+        except Exception:
+            await message.answer(text, reply_markup=keyboard)
+    else:
+        await message.answer(text, reply_markup=keyboard)
+
+
+@router.callback_query(F.data == "back_to_main")
+async def handle_back_to_main(callback: CallbackQuery) -> None:
+    """Handle back to main menu."""
+    await callback.answer()
+    await callback.message.edit_text(
+        "🏠 Главное меню",
+        reply_markup=get_main_keyboard(),
+    )
+
+
+# Summary creation state storage (in-memory, keyed by user_id)
+_summary_creation_state: dict[int, dict] = {}
+
+
+@router.callback_query(F.data == "create_summary_group")
+async def handle_create_summary_group(callback: CallbackQuery) -> None:
+    """Start summary group creation flow."""
+    await callback.answer()
+    user_id = callback.from_user.id
+    
+    # Initialize creation state
+    _summary_creation_state[user_id] = {
+        "step": "name",
+        "name": None,
+        "prompt": None,
+        "channel_ids": [],
+    }
+    
+    await callback.message.edit_text(
+        "📝 Создание группы сводок\n\n"
+        "Шаг 1/3: Введите название группы:",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="❌ Отмена", callback_data="cancel_summary_creation")]
+        ]),
+    )
+
+
+@router.callback_query(F.data == "cancel_summary_creation")
+async def handle_cancel_summary_creation(
+    callback: CallbackQuery,
+    summary_group_storage: SummaryGroupStorage,
+) -> None:
+    """Cancel summary group creation."""
+    await callback.answer("Отменено")
+    user_id = callback.from_user.id
+    
+    if user_id in _summary_creation_state:
+        del _summary_creation_state[user_id]
+    
+    await show_summaries_menu(callback.message, user_id, summary_group_storage, edit=True)
+
+
+@router.callback_query(F.data == "finish_channel_selection")
+async def handle_finish_channel_selection(
+    callback: CallbackQuery,
+    summary_group_storage: SummaryGroupStorage,
+) -> None:
+    """Finish channel selection and create the summary group."""
+    await callback.answer()
+    user_id = callback.from_user.id
+    
+    state = _summary_creation_state.get(user_id)
+    if not state:
+        await callback.message.edit_text("⚠️ Сессия создания истекла. Попробуйте снова.")
+        return
+    
+    if not state.get("channel_ids"):
+        await callback.message.edit_text(
+            "⚠️ Добавьте хотя бы один канал!\n\n"
+            "Отправьте username канала (например: @channel или channel):",
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="❌ Отмена", callback_data="cancel_summary_creation")]
+            ]),
+        )
+        return
+    
+    # Create the group
+    group_id = await summary_group_storage.create_group(
+        user_id=user_id,
+        name=state["name"],
+        prompt=state["prompt"],
+        channel_ids=state["channel_ids"],
+    )
+    
+    # Clean up state
+    del _summary_creation_state[user_id]
+    
+    await callback.message.edit_text(
+        f"✅ Группа сводок создана!\n\n"
+        f"📁 {state['name']}\n"
+        f"📝 Промпт: {state['prompt'][:50]}...\n"
+        f"📺 Каналов: {len(state['channel_ids'])}",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="📊 К сводкам", callback_data="summaries_menu")]
+        ]),
+    )
+
+
+@router.callback_query(F.data.startswith("run_summary:"))
+async def handle_run_summary(
+    callback: CallbackQuery,
+    summary_group_storage: SummaryGroupStorage,
+    token_storage: TokenStorage,
+) -> None:
+    """Run summary generation for a group."""
+    from app.telegram.telethon_service import TelethonService
+    from app.llm.summary_generator import SummaryGenerator
+    from app.config import get_settings
+    
+    await callback.answer("Генерирую сводку...")
+    
+    user_id = callback.from_user.id
+    group_id = callback.data.split(":")[1]
+    group = await summary_group_storage.get_group(group_id)
+    
+    if not group:
+        await callback.message.edit_text("⚠️ Группа не найдена.")
+        return
+    
+    channel_ids = group.get("channel_ids", [])
+    prompt = group.get("prompt", "Создай краткую сводку")
+    group_name = group.get("name", "Сводка")
+    
+    if not channel_ids:
+        await callback.message.edit_text(
+            f"⚠️ В группе '{group_name}' нет каналов.",
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="✏️ Редактировать", callback_data=f"edit_summary:{group_id}")]
+            ]),
+        )
+        return
+    
+    # Show progress
+    await callback.message.edit_text(
+        f"⏳ Генерирую сводку для '{group_name}'...\n\n"
+        f"Каналов: {len(channel_ids)}\n"
+        "Это может занять несколько минут."
+    )
+    
+    settings = get_settings()
+    
+    # Load user's Telethon session
+    session_string = await token_storage.get_telethon_session(user_id)
+    telethon_service = TelethonService(settings, session_string)
+    
+    # Check Telethon configuration
+    if not telethon_service.is_configured:
+        await callback.message.edit_text(
+            "⚠️ Telethon не настроен администратором.",
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="🔙 Назад", callback_data="summaries_menu")]
+            ]),
+        )
+        return
+    
+    # Check user authorization
+    if not session_string or not await telethon_service.is_authorized():
+        await callback.message.edit_text(
+            "⚠️ Требуется авторизация в Telethon.\n\n"
+            "Используйте /telethon_auth для авторизации.",
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="🔙 Назад", callback_data="summaries_menu")]
+            ]),
+        )
+        return
+    
+    try:
+        # Fetch messages from all channels
+        channels_data = []
+        for channel_id in channel_ids:
+            channel_info = await telethon_service.get_channel_info(channel_id)
+            channel_name = channel_info.get("title", channel_id) if channel_info else channel_id
+            
+            messages_text = await telethon_service.get_channel_messages_formatted(
+                channel_id, limit=500
+            )
+            
+            if messages_text:
+                channels_data.append({
+                    "channel_name": channel_name,
+                    "messages_text": messages_text,
+                })
+        
+        if not channels_data:
+            await callback.message.edit_text(
+                "⚠️ Не удалось получить сообщения ни из одного канала.",
+                reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                    [InlineKeyboardButton(text="🔙 Назад", callback_data="summaries_menu")]
+                ]),
+            )
+            return
+        
+        # Generate summary
+        summary_generator = SummaryGenerator(settings)
+        summary = await summary_generator.generate_multi_channel_summary(
+            channels_data, prompt
+        )
+        
+        # Send the result
+        result_text = f"📊 **{group_name}**\n\n{summary}"
+        
+        # Split if too long
+        if len(result_text) > 4096:
+            for i in range(0, len(result_text), 4096):
+                if i == 0:
+                    await callback.message.edit_text(result_text[:4096])
+                else:
+                    await callback.message.answer(result_text[i:i+4096])
+        else:
+            await callback.message.edit_text(
+                result_text,
+                reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                    [InlineKeyboardButton(text="🔄 Обновить", callback_data=f"run_summary:{group_id}")],
+                    [InlineKeyboardButton(text="🔙 К сводкам", callback_data="summaries_menu")],
+                ]),
+            )
+            
+    except Exception as e:
+        logger.error(f"Summary generation error: {e}")
+        await callback.message.edit_text(
+            f"⚠️ Ошибка при генерации сводки:\n{str(e)[:200]}",
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="🔙 Назад", callback_data="summaries_menu")]
+            ]),
+        )
+
+
+@router.callback_query(F.data.startswith("edit_summary:"))
+async def handle_edit_summary(
+    callback: CallbackQuery,
+    summary_group_storage: SummaryGroupStorage,
+) -> None:
+    """Show edit options for a summary group."""
+    await callback.answer()
+    
+    group_id = callback.data.split(":")[1]
+    group = await summary_group_storage.get_group(group_id)
+    
+    if not group:
+        await callback.message.edit_text("⚠️ Группа не найдена.")
+        return
+    
+    name = group.get("name", "Без названия")
+    prompt = group.get("prompt", "")
+    channels = group.get("channel_ids", [])
+    
+    text = (
+        f"✏️ Редактирование: {name}\n\n"
+        f"📝 Промпт: {prompt[:100]}{'...' if len(prompt) > 100 else ''}\n\n"
+        f"📺 Каналы ({len(channels)}):\n"
+    )
+    for ch in channels[:10]:
+        text += f"  • {ch}\n"
+    if len(channels) > 10:
+        text += f"  ... и ещё {len(channels) - 10}\n"
+    
+    await callback.message.edit_text(
+        text,
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="➕ Добавить канал", callback_data=f"add_channel:{group_id}")],
+            [InlineKeyboardButton(text="📝 Изменить промпт", callback_data=f"edit_prompt:{group_id}")],
+            [InlineKeyboardButton(text="🔙 Назад", callback_data="summaries_menu")],
+        ]),
+    )
+
+
+@router.callback_query(F.data.startswith("delete_summary:"))
+async def handle_delete_summary(
+    callback: CallbackQuery,
+    summary_group_storage: SummaryGroupStorage,
+) -> None:
+    """Confirm and delete a summary group."""
+    await callback.answer()
+    
+    group_id = callback.data.split(":")[1]
+    group = await summary_group_storage.get_group(group_id)
+    
+    if not group:
+        await callback.message.edit_text("⚠️ Группа не найдена.")
+        return
+    
+    name = group.get("name", "Без названия")
+    
+    await callback.message.edit_text(
+        f"🗑 Удалить группу '{name}'?",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [
+                InlineKeyboardButton(text="✅ Да, удалить", callback_data=f"confirm_delete_summary:{group_id}"),
+                InlineKeyboardButton(text="❌ Отмена", callback_data="summaries_menu"),
+            ]
+        ]),
+    )
+
+
+@router.callback_query(F.data.startswith("confirm_delete_summary:"))
+async def handle_confirm_delete_summary(
+    callback: CallbackQuery,
+    summary_group_storage: SummaryGroupStorage,
+) -> None:
+    """Actually delete the summary group."""
+    await callback.answer("Удалено")
+    
+    group_id = callback.data.split(":")[1]
+    user_id = callback.from_user.id
+    
+    deleted = await summary_group_storage.delete_group(group_id)
+    
+    if deleted:
+        await show_summaries_menu(callback.message, user_id, summary_group_storage, edit=True)
+    else:
+        await callback.message.edit_text("⚠️ Не удалось удалить группу.")
+
+
+# Handler for text input during summary creation
+async def process_summary_creation_input(
+    message: Message,
+    summary_group_storage: SummaryGroupStorage,
+) -> bool:
+    """
+    Process text input during summary creation.
+    
+    Returns True if the message was handled, False otherwise.
+    """
+    user_id = message.from_user.id if message.from_user else 0
+    state = _summary_creation_state.get(user_id)
+    
+    if not state:
+        return False
+    
+    text = message.text.strip() if message.text else ""
+    
+    if state["step"] == "name":
+        # Validate name
+        if len(text) < 1 or len(text) > 50:
+            await message.answer(
+                "⚠️ Название должно быть от 1 до 50 символов. Попробуйте снова:"
+            )
+            return True
+        
+        state["name"] = text
+        state["step"] = "prompt"
+        
+        await message.answer(
+            "📝 Создание группы сводок\n\n"
+            f"Название: {text}\n\n"
+            "Шаг 2/3: Введите промпт для AI (что именно нужно извлечь из каналов):\n\n"
+            "Примеры:\n"
+            "• Сделай краткую сводку новостей за последние 24 часа\n"
+            "• Выдели ключевые темы и тренды\n"
+            "• Найди упоминания криптовалют и их анализ",
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="❌ Отмена", callback_data="cancel_summary_creation")]
+            ]),
+        )
+        return True
+    
+    elif state["step"] == "prompt":
+        if len(text) < 5:
+            await message.answer(
+                "⚠️ Промпт слишком короткий. Опишите подробнее, что нужно извлечь:"
+            )
+            return True
+        
+        state["prompt"] = text
+        state["step"] = "channels"
+        
+        await message.answer(
+            "📝 Создание группы сводок\n\n"
+            f"Название: {state['name']}\n"
+            f"Промпт: {text[:50]}...\n\n"
+            "Шаг 3/3: Добавьте каналы.\n\n"
+            "Отправьте username канала (например: @channel или просто channel).\n"
+            "Когда закончите, нажмите 'Готово'.",
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="✅ Готово", callback_data="finish_channel_selection")],
+                [InlineKeyboardButton(text="❌ Отмена", callback_data="cancel_summary_creation")],
+            ]),
+        )
+        return True
+    
+    elif state["step"] == "channels":
+        # Clean up channel username
+        channel = text.lstrip("@").strip()
+        
+        if not channel:
+            await message.answer("⚠️ Введите username канала:")
+            return True
+        
+        if channel in state["channel_ids"]:
+            await message.answer(f"⚠️ Канал {channel} уже добавлен.")
+            return True
+        
+        state["channel_ids"].append(channel)
+        
+        channels_list = "\n".join([f"  • {ch}" for ch in state["channel_ids"]])
+        
+        await message.answer(
+            f"✅ Канал {channel} добавлен!\n\n"
+            f"Добавленные каналы:\n{channels_list}\n\n"
+            "Отправьте ещё канал или нажмите 'Готово'.",
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="✅ Готово", callback_data="finish_channel_selection")],
+                [InlineKeyboardButton(text="❌ Отмена", callback_data="cancel_summary_creation")],
+            ]),
+        )
+        return True
+    
+    return False
+
+
+# ==================== COMPLETED TASKS SUMMARY ====================
+
+
+# Temporary storage for completed tasks (to use in delete handler)
+_completed_tasks_cache: dict[int, list[dict]] = {}
+
+
+@router.callback_query(F.data == "completed_tasks_summary")
+async def handle_completed_tasks_summary(
+    callback: CallbackQuery,
+    token_storage: TokenStorage,
+) -> None:
+    """Generate summary for completed tasks and save to Notion."""
+    from app.google.auth import GoogleAuthService
+    from app.google.tasks import TasksService
+    from app.notion.service import NotionService
+    from app.llm.summary_generator import SummaryGenerator
+    from app.config import get_settings
+    from datetime import datetime
+    
+    await callback.answer("Загружаю выполненные задачи...")
+    
+    user_id = callback.from_user.id
+    settings = get_settings()
+    
+    # Check Google auth
+    auth_service = GoogleAuthService(settings, token_storage)
+    credentials = await auth_service.get_credentials(user_id)
+    
+    if not credentials:
+        await callback.message.edit_text(
+            "⚠️ Требуется авторизация в Google.\n"
+            "Выполните /auth",
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="🔙 Назад", callback_data="summaries_menu")]
+            ]),
+        )
+        return
+    
+    # Show progress
+    await callback.message.edit_text("⏳ Получаю выполненные задачи...")
+    
+    try:
+        # Get completed tasks
+        tasks_service = TasksService()
+        tasks = await tasks_service.list_tasks(
+            credentials=credentials,
+            max_results=100,
+            show_completed=True,
+        )
+        
+        # Filter only completed
+        completed_tasks = [t for t in tasks if t.get("status") == "completed"]
+        
+        if not completed_tasks:
+            await callback.message.edit_text(
+                "📋 Нет выполненных задач для создания сводки.",
+                reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                    [InlineKeyboardButton(text="🔙 Назад", callback_data="summaries_menu")]
+                ]),
+            )
+            return
+        
+        # Cache for delete handler
+        _completed_tasks_cache[user_id] = completed_tasks
+        
+        # Format tasks for AI
+        tasks_text = "\n".join([
+            f"- {t.get('title', 'Без названия')}" + 
+            (f" ({t.get('notes', '')[:50]})" if t.get('notes') else "")
+            for t in completed_tasks
+        ])
+        
+        await callback.message.edit_text(
+            f"⏳ Генерирую сводку по {len(completed_tasks)} задачам..."
+        )
+        
+        # Generate AI summary
+        summary_generator = SummaryGenerator(settings)
+        summary = await summary_generator.generate_summary(
+            messages_text=f"Выполненные задачи:\n{tasks_text}",
+            prompt="Создай краткую сводку выполненных задач. Сгруппируй по категориям, выдели ключевые достижения.",
+            channel_name="Completed Tasks",
+        )
+        
+        # Save to Notion if user has configured it
+        notion_saved = False
+        notion_url = None
+        
+        # Get user's personal Notion token
+        user_notion_token = await token_storage.get_notion_token(user_id)
+        parent_page_id = await token_storage.get_notion_parent_page_id(user_id)
+        
+        if user_notion_token and parent_page_id:
+            notion_service = NotionService(user_notion_token, parent_page_id)
+            
+            try:
+                # Find or create unified "📊 Сводки" page
+                summary_page_id = await token_storage.get_notion_summary_page_id(user_id)
+                
+                if not summary_page_id:
+                    # Find or create the summary page
+                    page = await notion_service.find_or_create_summary_page(parent_page_id)
+                    summary_page_id = page["id"]
+                    notion_url = page.get("url")
+                    await token_storage.set_notion_summary_page_id(user_id, summary_page_id)
+                
+                # Append summary to the page
+                await notion_service.append_summary(
+                    summary_page_id, 
+                    summary, 
+                    summary_type="Выполненные задачи"
+                )
+                notion_saved = True
+                
+            except Exception as e:
+                logger.warning(f"Failed to save to Notion: {e}")
+        
+        # Prepare result message
+        result_text = f"✅ Сводка по выполненным задачам ({len(completed_tasks)}):\n\n{summary}"
+        
+        if notion_saved:
+            result_text += "\n\n📝 Сохранено в Notion"
+            if notion_url:
+                result_text += f": {notion_url}"
+        
+        # Truncate if needed
+        if len(result_text) > 3800:
+            result_text = result_text[:3800] + "\n..."
+        
+        await callback.message.edit_text(
+            result_text,
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(
+                    text="🗑 Удалить выполненные",
+                    callback_data="delete_completed_tasks"
+                )],
+                [InlineKeyboardButton(text="🔙 К сводкам", callback_data="summaries_menu")],
+            ]),
+        )
+        
+    except Exception as e:
+        logger.error(f"Completed tasks summary error: {e}")
+        await callback.message.edit_text(
+            f"⚠️ Ошибка: {str(e)[:200]}",
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="🔙 Назад", callback_data="summaries_menu")]
+            ]),
+        )
+
+
+@router.callback_query(F.data == "delete_completed_tasks")
+async def handle_delete_completed_tasks(
+    callback: CallbackQuery,
+    token_storage: TokenStorage,
+) -> None:
+    """Delete completed tasks (except recurring ones)."""
+    from app.google.auth import GoogleAuthService
+    from app.google.tasks import TasksService
+    from app.config import get_settings
+    
+    await callback.answer("Удаляю задачи...")
+    
+    user_id = callback.from_user.id
+    settings = get_settings()
+    
+    # Get cached tasks
+    completed_tasks = _completed_tasks_cache.get(user_id, [])
+    
+    if not completed_tasks:
+        await callback.message.edit_text(
+            "⚠️ Список задач устарел. Сгенерируйте сводку заново.",
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="✅ Выполненные задачи", callback_data="completed_tasks_summary")],
+                [InlineKeyboardButton(text="🔙 Назад", callback_data="summaries_menu")],
+            ]),
+        )
+        return
+    
+    auth_service = GoogleAuthService(settings, token_storage)
+    credentials = await auth_service.get_credentials(user_id)
+    
+    if not credentials:
+        await callback.message.edit_text(
+            "⚠️ Требуется авторизация.",
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="🔙 Назад", callback_data="summaries_menu")]
+            ]),
+        )
+        return
+    
+    await callback.message.edit_text(f"⏳ Удаляю {len(completed_tasks)} задач...")
+    
+    try:
+        tasks_service = TasksService()
+        deleted_count = 0
+        skipped_count = 0
+        
+        for task in completed_tasks:
+            task_id = task.get("id")
+            title = task.get("title", "")
+            
+            # Skip recurring tasks (detected by patterns in title or notes)
+            is_recurring = any(keyword in title.lower() for keyword in [
+                "ежедневно", "еженедельно", "ежемесячно",
+                "каждый день", "каждую неделю", "каждый месяц",
+                "daily", "weekly", "monthly", "recurring",
+                "повторять", "повтор",
+            ])
+            
+            # Also check notes
+            notes = task.get("notes", "") or ""
+            if any(keyword in notes.lower() for keyword in ["recurring", "повтор", "rrule"]):
+                is_recurring = True
+            
+            if is_recurring:
+                skipped_count += 1
+                logger.info(f"Skipped recurring task: {title}")
+                continue
+            
+            try:
+                await tasks_service.delete_task(credentials, task_id)
+                deleted_count += 1
+            except Exception as e:
+                logger.warning(f"Failed to delete task {task_id}: {e}")
+        
+        # Clear cache
+        if user_id in _completed_tasks_cache:
+            del _completed_tasks_cache[user_id]
+        
+        result_text = f"✅ Удалено задач: {deleted_count}"
+        if skipped_count > 0:
+            result_text += f"\n⏩ Пропущено повторяющихся: {skipped_count}"
+        
+        await callback.message.edit_text(
+            result_text,
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="🔙 К сводкам", callback_data="summaries_menu")],
+            ]),
+        )
+        
+    except Exception as e:
+        logger.error(f"Delete completed tasks error: {e}")
+        await callback.message.edit_text(
+            f"⚠️ Ошибка при удалении: {str(e)[:200]}",
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="🔙 Назад", callback_data="summaries_menu")]
+            ]),
+        )
 

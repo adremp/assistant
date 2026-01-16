@@ -11,6 +11,7 @@ from app.storage.tokens import TokenStorage
 from app.storage.reminders import ReminderStorage
 from app.storage.pending_responses import PendingResponseStorage
 from app.storage.pending_reminder_confirm import PendingReminderConfirmation
+from app.storage.summary_groups import SummaryGroupStorage
 from app.scheduler.service import ReminderScheduler
 from app.llm.client import LLMClient
 from app.llm.history import ConversationHistory
@@ -98,6 +99,10 @@ async def lifespan(app: FastAPI):
     dp.workflow_data["pending_storage"] = pending_storage
     dp.workflow_data["pending_confirm"] = pending_confirm
     dp.workflow_data["reminder_storage"] = reminder_storage
+    
+    # Initialize summary group storage
+    summary_group_storage = SummaryGroupStorage(redis)
+    dp.workflow_data["summary_group_storage"] = summary_group_storage
 
     # Store in app state
     app.state.redis = redis

@@ -10,9 +10,12 @@ dependencies = [
     "uvicorn[standard]>=0.30.0",
     # Telegram
     "aiogram>=3.13.0",
+    "telethon>=1.36.0",  # MTProto client for channel history
     # Google APIs
     "google-api-python-client>=2.150.0",
     "google-auth-oauthlib>=1.2.0",
+    # Notion API
+    "notion-client>=2.0.0",
     # LLM (OpenAI SDK for Grok/other providers)
     "openai>=1.50.0",
     # Configuration

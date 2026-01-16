@@ -132,3 +132,76 @@ class TokenStorage:
         token_data["timezone"] = timezone
         await self.save_token(user_id, token_data)
         logger.info(f"Saved timezone {timezone} for user {user_id}")
+
+    # Per-user Notion settings
+    async def get_notion_token(self, user_id: int) -> str | None:
+        """Get user's personal Notion API token."""
+        token_data = await self.load_token(user_id)
+        if token_data is None:
+            return None
+        return token_data.get("notion_token")
+
+    async def set_notion_token(self, user_id: int, notion_token: str) -> None:
+        """Set user's personal Notion API token."""
+        token_data = await self.load_token(user_id)
+        if token_data is None:
+            token_data = {}
+        token_data["notion_token"] = notion_token
+        await self.save_token(user_id, token_data)
+        logger.info(f"Saved Notion token for user {user_id}")
+
+    async def get_notion_parent_page_id(self, user_id: int) -> str | None:
+        """Get user's Notion parent page ID for new pages."""
+        token_data = await self.load_token(user_id)
+        if token_data is None:
+            return None
+        return token_data.get("notion_parent_page_id")
+
+    async def set_notion_parent_page_id(self, user_id: int, page_id: str) -> None:
+        """Set user's Notion parent page ID."""
+        token_data = await self.load_token(user_id)
+        if token_data is None:
+            token_data = {}
+        token_data["notion_parent_page_id"] = page_id
+        await self.save_token(user_id, token_data)
+        logger.info(f"Saved Notion parent page ID for user {user_id}")
+
+    async def get_notion_summary_page_id(self, user_id: int) -> str | None:
+        """Get user's unified Notion summary page ID ('📊 Сводки')."""
+        token_data = await self.load_token(user_id)
+        if token_data is None:
+            return None
+        return token_data.get("notion_summary_page_id")
+
+    async def set_notion_summary_page_id(self, user_id: int, page_id: str) -> None:
+        """Set user's unified Notion summary page ID."""
+        token_data = await self.load_token(user_id)
+        if token_data is None:
+            token_data = {}
+        token_data["notion_summary_page_id"] = page_id
+        await self.save_token(user_id, token_data)
+
+    # Per-user Telethon session
+    async def get_telethon_session(self, user_id: int) -> str | None:
+        """Get user's Telethon session string."""
+        token_data = await self.load_token(user_id)
+        if token_data is None:
+            return None
+        return token_data.get("telethon_session")
+
+    async def set_telethon_session(self, user_id: int, session_string: str) -> None:
+        """Set user's Telethon session string."""
+        token_data = await self.load_token(user_id)
+        if token_data is None:
+            token_data = {}
+        token_data["telethon_session"] = session_string
+        await self.save_token(user_id, token_data)
+        logger.info(f"Saved Telethon session for user {user_id}")
+
+    async def clear_telethon_session(self, user_id: int) -> None:
+        """Clear user's Telethon session."""
+        token_data = await self.load_token(user_id)
+        if token_data and "telethon_session" in token_data:
+            del token_data["telethon_session"]
+            await self.save_token(user_id, token_data)
+            logger.info(f"Cleared Telethon session for user {user_id}")
