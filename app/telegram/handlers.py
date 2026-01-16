@@ -1005,30 +1005,50 @@ async def handle_cancel_reminder(
 async def handle_summaries_command(
     message: Message,
     summary_group_storage: SummaryGroupStorage,
+    token_storage: TokenStorage,
 ) -> None:
     """Handle /summaries command - show summary groups menu."""
     user_id = message.from_user.id if message.from_user else 0
-    await show_summaries_menu(message, user_id, summary_group_storage)
+    await show_summaries_menu(message, user_id, summary_group_storage, token_storage)
 
 
 @router.callback_query(F.data == "summaries_menu")
 async def handle_summaries_menu_callback(
     callback: CallbackQuery,
     summary_group_storage: SummaryGroupStorage,
+    token_storage: TokenStorage,
 ) -> None:
     """Handle summaries menu button click."""
     await callback.answer()
     user_id = callback.from_user.id
-    await show_summaries_menu(callback.message, user_id, summary_group_storage, edit=True)
+    await show_summaries_menu(callback.message, user_id, summary_group_storage, token_storage, edit=True)
 
 
 async def show_summaries_menu(
     message: Message,
     user_id: int,
     summary_group_storage: SummaryGroupStorage,
+    token_storage: TokenStorage | None = None,
     edit: bool = False,
 ) -> None:
     """Show summary groups menu."""
+    # Check Telethon authorization
+    if token_storage:
+        session_string = await token_storage.get_telethon_session(user_id)
+        if not session_string:
+            text = (
+                "⚠️ Для работы со сводками требуется авторизация в Telegram.\n\n"
+                "Используйте команду /telethon_auth для авторизации."
+            )
+            keyboard = InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="🔙 Назад", callback_data="back_to_main")]
+            ])
+            if edit and message:
+                await message.edit_text(text, reply_markup=keyboard)
+            elif message:
+                await message.answer(text, reply_markup=keyboard)
+            return
+
     groups = await summary_group_storage.get_user_groups(user_id)
     
     buttons = []
@@ -1120,6 +1140,7 @@ async def handle_create_summary_group(callback: CallbackQuery) -> None:
 async def handle_cancel_summary_creation(
     callback: CallbackQuery,
     summary_group_storage: SummaryGroupStorage,
+    token_storage: TokenStorage,
 ) -> None:
     """Cancel summary group creation."""
     await callback.answer("Отменено")
@@ -1128,7 +1149,7 @@ async def handle_cancel_summary_creation(
     if user_id in _summary_creation_state:
         del _summary_creation_state[user_id]
     
-    await show_summaries_menu(callback.message, user_id, summary_group_storage, edit=True)
+    await show_summaries_menu(callback.message, user_id, summary_group_storage, token_storage, edit=True)
 
 
 @router.callback_query(F.data == "finish_channel_selection")
@@ -1174,6 +1195,51 @@ async def handle_finish_channel_selection(
         reply_markup=InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text="📊 К сводкам", callback_data="summaries_menu")]
         ]),
+    )
+
+
+@router.callback_query(F.data.startswith("toggle_channel:"))
+async def handle_toggle_channel(callback: CallbackQuery) -> None:
+    """Toggle channel selection in summary group creation."""
+    await callback.answer()
+    user_id = callback.from_user.id
+    
+    state = _summary_creation_state.get(user_id)
+    if not state or state.get("step") != "channels":
+        return
+    
+    channel_id = callback.data.split(":", 1)[1]
+    
+    # Toggle selection
+    if channel_id in state["channel_ids"]:
+        state["channel_ids"].remove(channel_id)
+    else:
+        state["channel_ids"].append(channel_id)
+    
+    # Rebuild buttons
+    buttons = []
+    for ch in state.get("available_channels", [])[:30]:
+        ch_id = ch.get("username") or str(ch.get("id"))
+        title = ch.get("title", "Unknown")[:25]
+        is_selected = ch_id in state["channel_ids"]
+        prefix = "✅ " if is_selected else ""
+        buttons.append([
+            InlineKeyboardButton(
+                text=f"{prefix}{title}",
+                callback_data=f"toggle_channel:{ch_id}",
+            )
+        ])
+    
+    buttons.append([InlineKeyboardButton(text="✅ Готово", callback_data="finish_channel_selection")])
+    buttons.append([InlineKeyboardButton(text="❌ Отмена", callback_data="cancel_summary_creation")])
+    
+    selected_count = len(state["channel_ids"])
+    await callback.message.edit_text(
+        "📝 Создание группы сводок\n\n"
+        f"Название: {state['name']}\n"
+        f"Промпт: {state['prompt'][:50]}...\n\n"
+        f"Шаг 3/3: Выберите каналы (выбрано: {selected_count}):",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons),
     )
 
 
@@ -1377,6 +1443,7 @@ async def handle_delete_summary(
 async def handle_confirm_delete_summary(
     callback: CallbackQuery,
     summary_group_storage: SummaryGroupStorage,
+    token_storage: TokenStorage,
 ) -> None:
     """Actually delete the summary group."""
     await callback.answer("Удалено")
@@ -1387,7 +1454,7 @@ async def handle_confirm_delete_summary(
     deleted = await summary_group_storage.delete_group(group_id)
     
     if deleted:
-        await show_summaries_menu(callback.message, user_id, summary_group_storage, edit=True)
+        await show_summaries_menu(callback.message, user_id, summary_group_storage, token_storage, edit=True)
     else:
         await callback.message.edit_text("⚠️ Не удалось удалить группу.")
 
@@ -1444,45 +1511,77 @@ async def process_summary_creation_input(
         
         state["prompt"] = text
         state["step"] = "channels"
+        state["available_channels"] = []  # Will be loaded
+        
+        # Load user's channels from Telethon
+        from app.telegram.telethon_service import TelethonService
+        from app.config import get_settings
+        
+        settings = get_settings()
+        session_string = await summary_group_storage.redis.get(f"telethon_session:{user_id}")
+        if session_string:
+            session_string = session_string.decode() if isinstance(session_string, bytes) else session_string
+        
+        if not session_string:
+            await message.answer(
+                "⚠️ Требуется авторизация Telethon для загрузки каналов.\n"
+                "Используйте /telethon_auth и повторите создание группы.",
+                reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                    [InlineKeyboardButton(text="🔙 Назад", callback_data="summaries_menu")]
+                ]),
+            )
+            if user_id in _summary_creation_state:
+                del _summary_creation_state[user_id]
+            return True
+        
+        telethon_service = TelethonService(settings, session_string)
+        channels = await telethon_service.get_user_channels()
+        await telethon_service.disconnect()
+        
+        if not channels:
+            await message.answer(
+                "⚠️ Не найдено каналов. Убедитесь, что вы подписаны на каналы.",
+                reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                    [InlineKeyboardButton(text="🔙 Назад", callback_data="summaries_menu")]
+                ]),
+            )
+            if user_id in _summary_creation_state:
+                del _summary_creation_state[user_id]
+            return True
+        
+        state["available_channels"] = channels
+        
+        # Build channel selection buttons
+        buttons = []
+        for ch in channels[:30]:  # Limit to 30 channels
+            ch_id = ch.get("username") or str(ch.get("id"))
+            title = ch.get("title", "Unknown")[:25]
+            is_selected = ch_id in state["channel_ids"]
+            prefix = "✅ " if is_selected else ""
+            buttons.append([
+                InlineKeyboardButton(
+                    text=f"{prefix}{title}",
+                    callback_data=f"toggle_channel:{ch_id}",
+                )
+            ])
+        
+        buttons.append([InlineKeyboardButton(text="✅ Готово", callback_data="finish_channel_selection")])
+        buttons.append([InlineKeyboardButton(text="❌ Отмена", callback_data="cancel_summary_creation")])
         
         await message.answer(
             "📝 Создание группы сводок\n\n"
             f"Название: {state['name']}\n"
             f"Промпт: {text[:50]}...\n\n"
-            "Шаг 3/3: Добавьте каналы.\n\n"
-            "Отправьте username канала (например: @channel или просто channel).\n"
-            "Когда закончите, нажмите 'Готово'.",
-            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
-                [InlineKeyboardButton(text="✅ Готово", callback_data="finish_channel_selection")],
-                [InlineKeyboardButton(text="❌ Отмена", callback_data="cancel_summary_creation")],
-            ]),
+            "Шаг 3/3: Выберите каналы:",
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons),
         )
         return True
     
     elif state["step"] == "channels":
-        # Clean up channel username
-        channel = text.lstrip("@").strip()
-        
-        if not channel:
-            await message.answer("⚠️ Введите username канала:")
-            return True
-        
-        if channel in state["channel_ids"]:
-            await message.answer(f"⚠️ Канал {channel} уже добавлен.")
-            return True
-        
-        state["channel_ids"].append(channel)
-        
-        channels_list = "\n".join([f"  • {ch}" for ch in state["channel_ids"]])
-        
+        # Channels are now selected via buttons, ignore text input
         await message.answer(
-            f"✅ Канал {channel} добавлен!\n\n"
-            f"Добавленные каналы:\n{channels_list}\n\n"
-            "Отправьте ещё канал или нажмите 'Готово'.",
-            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
-                [InlineKeyboardButton(text="✅ Готово", callback_data="finish_channel_selection")],
-                [InlineKeyboardButton(text="❌ Отмена", callback_data="cancel_summary_creation")],
-            ]),
+            "📌 Выберите каналы, нажимая на кнопки выше.\n"
+            "Нажмите 'Готово' когда закончите."
         )
         return True
     

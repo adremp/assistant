@@ -114,6 +114,35 @@ class TelethonService:
             logger.error(f"Telethon sign_in failed: {e}")
             return None
 
+    async def get_user_channels(self) -> list[dict]:
+        """
+        Get all channels the user is subscribed to.
+
+        Returns:
+            List of channel dicts with id, title, username
+        """
+        client = await self.get_client()
+        if client is None or not await self.is_authorized():
+            return []
+
+        try:
+            channels = []
+            async for dialog in client.iter_dialogs():
+                entity = dialog.entity
+                if isinstance(entity, (Channel, Chat)):
+                    # Only include channels/supergroups, not regular chats
+                    if isinstance(entity, Channel) or (hasattr(entity, 'megagroup') and entity.megagroup):
+                        channels.append({
+                            "id": entity.id,
+                            "title": getattr(entity, "title", "Unknown"),
+                            "username": getattr(entity, "username", None),
+                        })
+            logger.info(f"Found {len(channels)} channels for user")
+            return channels
+        except Exception as e:
+            logger.error(f"Failed to get user channels: {e}")
+            return []
+
     async def get_channel_info(self, channel_id: str) -> dict | None:
         """
         Get channel information.
