@@ -289,3 +289,155 @@ class CalendarService:
         except HttpError as e:
             logger.error(f"Failed to delete event {event_id}: {e}")
             raise
+
+    async def list_calendars(self, credentials: Credentials) -> list[dict[str, Any]]:
+        """List all calendars for the user."""
+        service = self._get_service(credentials)
+
+        try:
+            result = service.calendarList().list().execute()
+            calendars = result.get("items", [])
+            return [
+                {"id": c.get("id"), "summary": c.get("summary")}
+                for c in calendars
+            ]
+        except HttpError as e:
+            logger.error(f"Failed to list calendars: {e}")
+            raise
+
+    async def get_or_create_reminders_calendar(
+        self,
+        credentials: Credentials,
+        calendar_name: str = "Напоминания",
+    ) -> str:
+        """
+        Get or create a dedicated reminders calendar.
+
+        Args:
+            credentials: Valid Google credentials
+            calendar_name: Name of the reminders calendar
+
+        Returns:
+            Calendar ID
+        """
+        service = self._get_service(credentials)
+
+        # Search for existing calendar
+        calendars = await self.list_calendars(credentials)
+        for cal in calendars:
+            if cal.get("summary") == calendar_name:
+                logger.debug(f"Found existing reminders calendar: {cal['id']}")
+                return cal["id"]
+
+        # Create new calendar
+        try:
+            cal_body = {"summary": calendar_name, "timeZone": "UTC"}
+            result = service.calendars().insert(body=cal_body).execute()
+            calendar_id = result.get("id")
+            logger.info(f"Created reminders calendar: {calendar_id}")
+            return calendar_id
+        except HttpError as e:
+            logger.error(f"Failed to create reminders calendar: {e}")
+            raise
+
+    async def get_reminders(
+        self,
+        credentials: Credentials,
+        calendar_name: str = "Напоминания",
+    ) -> list[dict[str, Any]]:
+        """
+        Get all recurring events from reminders calendar with parsed schedule.
+
+        Args:
+            credentials: Valid Google credentials
+            calendar_name: Name of the reminders calendar
+
+        Returns:
+            List of reminder dicts with: id, time, schedule_type, weekdays, prompt
+        """
+        calendar_id = await self.get_or_create_reminders_calendar(credentials, calendar_name)
+        service = self._get_service(credentials)
+
+        try:
+            # Get recurring events (not expanded instances)
+            events_result = (
+                service.events()
+                .list(
+                    calendarId=calendar_id,
+                    singleEvents=False,  # Get recurring event definitions
+                    maxResults=100,
+                )
+                .execute()
+            )
+
+            events = events_result.get("items", [])
+            reminders = []
+
+            for event in events:
+                recurrence = event.get("recurrence", [])
+                if not recurrence:
+                    continue  # Skip non-recurring events
+
+                # Parse time from start
+                start = event.get("start", {})
+                start_time = start.get("dateTime") or start.get("date")
+                if not start_time:
+                    continue
+
+                try:
+                    dt = datetime.fromisoformat(start_time.replace("Z", "+00:00"))
+                    time_str = dt.strftime("%H:%M")
+                except ValueError:
+                    continue
+
+                # Parse RRULE
+                schedule_type, weekdays = self._parse_rrule(recurrence)
+                if not schedule_type:
+                    continue
+
+                reminders.append({
+                    "id": event.get("id"),
+                    "time": time_str,
+                    "schedule_type": schedule_type,
+                    "weekdays": weekdays,
+                    "prompt": event.get("description", "").strip() or event.get("summary", ""),
+                    "summary": event.get("summary", ""),
+                })
+
+            logger.info(f"Parsed {len(reminders)} reminders from calendar '{calendar_name}'")
+            return reminders
+
+        except HttpError as e:
+            logger.error(f"Failed to get reminders: {e}")
+            raise
+
+    def _parse_rrule(self, recurrence: list[str]) -> tuple[str | None, list[int] | None]:
+        """
+        Parse RRULE to extract schedule type and weekdays.
+
+        Args:
+            recurrence: List of RRULE strings
+
+        Returns:
+            Tuple of (schedule_type, weekdays)
+        """
+        for rule in recurrence:
+            if not rule.startswith("RRULE:"):
+                continue
+
+            if "FREQ=DAILY" in rule:
+                return "daily", None
+
+            if "FREQ=WEEKLY" in rule:
+                weekdays = None
+                # Parse BYDAY=MO,TU,WE,...
+                if "BYDAY=" in rule:
+                    day_map = {"MO": 0, "TU": 1, "WE": 2, "TH": 3, "FR": 4, "SA": 5, "SU": 6}
+                    import re
+                    match = re.search(r"BYDAY=([A-Z,]+)", rule)
+                    if match:
+                        days = match.group(1).split(",")
+                        weekdays = [day_map[d] for d in days if d in day_map]
+                return "weekly", weekdays or [0]
+
+        return None, None

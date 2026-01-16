@@ -11,7 +11,6 @@ from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKe
 
 from app.llm.client import LLMClient
 from app.storage.tokens import TokenStorage
-from app.storage.pending_responses import PendingResponseStorage
 from app.storage.pending_reminder_confirm import PendingReminderConfirmation
 from app.storage.reminders import ReminderStorage
 from app.storage.summary_groups import SummaryGroupStorage
@@ -660,17 +659,15 @@ async def handle_text_message(
     message: Message,
     llm_client: LLMClient,
     token_storage: TokenStorage,
-    pending_storage: PendingResponseStorage,
     summary_group_storage: SummaryGroupStorage,
 ) -> None:
     """
-    Handle all text messages - check for pending reminder or send to LLM.
+    Handle all text messages - route to appropriate handler or LLM.
 
     Args:
         message: Telegram message
         llm_client: LLM client from workflow_data
         token_storage: Token storage from workflow_data
-        pending_storage: Pending response storage
         summary_group_storage: Summary group storage
     """
     if not message.text:
@@ -689,14 +686,6 @@ async def handle_text_message(
 
     # Check for summary creation state
     if await process_summary_creation_input(message, summary_group_storage):
-        return
-
-    # Check for pending reminder response
-    pending = await pending_storage.get_pending(user_id)
-    if pending:
-        await _handle_reminder_response(
-            message, user_id, text, pending, pending_storage, token_storage
-        )
         return
 
     # Show typing indicator
@@ -788,18 +777,9 @@ async def _get_llm_response_with_rate_limit_handling(
 async def handle_voice_message(
     message: Message,
     llm_client: LLMClient,
-    pending_storage: PendingResponseStorage,
     token_storage: TokenStorage,
 ) -> None:
-    """
-    Handle voice messages - transcribe and check for pending reminder or send to LLM.
-
-    Args:
-        message: Telegram message with voice
-        llm_client: LLM client from workflow_data
-        pending_storage: Pending response storage
-        token_storage: Token storage for Google auth
-    """
+    """Handle voice messages - transcribe and send to LLM."""
     from app.llm.transcription import TranscriptionService
     from app.config import get_settings
     
@@ -809,17 +789,14 @@ async def handle_voice_message(
     if not voice or not message.bot:
         return
 
-    # Show typing indicator
     await message.bot.send_chat_action(message.chat.id, "typing")
 
     try:
-        # Download voice file
         file = await message.bot.get_file(voice.file_id)
         if not file.file_path:
             await message.answer("⚠️ Не удалось получить аудио файл.")
             return
         
-        # Download file content
         file_bytes = await message.bot.download_file(file.file_path)
         if not file_bytes:
             await message.answer("⚠️ Не удалось скачать аудио файл.")
@@ -827,7 +804,6 @@ async def handle_voice_message(
         
         audio_data = file_bytes.read()
         
-        # Transcribe audio
         settings = get_settings()
         transcription_service = TranscriptionService(settings)
         
@@ -842,26 +818,14 @@ async def handle_voice_message(
             await message.answer("⚠️ Не удалось распознать речь в сообщении.")
             return
         
-        # Show what was recognized
-        await message.answer(f"� Распознано: {transcribed_text}")
+        await message.answer(f"🎤 Распознано: {transcribed_text}")
         
-        # Check for pending reminder response
-        pending = await pending_storage.get_pending(user_id)
-        if pending:
-            await _handle_reminder_response(
-                message, user_id, transcribed_text, pending, pending_storage, token_storage
-            )
-            return
-        
-        # Show typing indicator again
         await message.bot.send_chat_action(message.chat.id, "typing")
         
-        # Send transcribed text to LLM (will be saved to history as user message)
         response = await _get_llm_response_with_rate_limit_handling(
             message, llm_client, user_id, transcribed_text, token_storage
         )
         
-        # Send response
         if len(response) > 4096:
             for i in range(0, len(response), 4096):
                 await message.answer(response[i:i+4096])
@@ -873,64 +837,6 @@ async def handle_voice_message(
         await message.answer(
             "⚠️ Произошла ошибка при обработке голосового сообщения.\n"
             "Попробуйте ещё раз."
-        )
-
-
-async def _handle_reminder_response(
-    message: Message,
-    user_id: int,
-    response_text: str,
-    pending: dict,
-    pending_storage: PendingResponseStorage,
-    token_storage: TokenStorage,
-) -> None:
-    """Handle user's response to a reminder by creating a completed Google Task."""
-    from app.google.auth import GoogleAuthService
-    from app.google.tasks import TasksService
-    from app.config import get_settings
-    
-    reminder_id = pending.get("reminder_id", "")
-    template = pending.get("template", "")
-    
-    # Clear pending state first
-    await pending_storage.clear_pending(user_id)
-    
-    # Try to save as completed Google Task
-    settings = get_settings()
-    auth_service = GoogleAuthService(settings, token_storage)
-    credentials = await auth_service.get_credentials(user_id)
-    
-    if credentials:
-        try:
-            tasks_service = TasksService()
-            now = datetime.now().strftime("%Y-%m-%d %H:%M")
-            task_title = f"📝 {template}"
-            task_notes = f"Ответ ({now}):\n{response_text}"
-            
-            await tasks_service.create_completed_task(
-                credentials=credentials,
-                title=task_title,
-                notes=task_notes,
-            )
-            
-            await message.answer(
-                "✅ Ответ сохранён в Google Tasks!\n\n"
-                f"📝 Шаблон: {template}\n"
-                f"💬 Ответ: {response_text}"
-            )
-            logger.info(f"Created completed task for reminder {reminder_id}, user {user_id}")
-        except Exception as e:
-            logger.error(f"Failed to create task for reminder response: {e}")
-            await message.answer(
-                "⚠️ Не удалось сохранить в Google Tasks.\n\n"
-                f"📝 Шаблон: {template}\n"
-                f"💬 Ответ: {response_text}"
-            )
-    else:
-        await message.answer(
-            "⚠️ Требуется авторизация в Google (/auth) для сохранения ответа.\n\n"
-            f"📝 Шаблон: {template}\n"
-            f"💬 Ответ: {response_text}"
         )
 
 

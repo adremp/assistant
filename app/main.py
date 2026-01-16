@@ -9,7 +9,6 @@ from redis.asyncio import Redis
 from app.config import get_settings
 from app.storage.tokens import TokenStorage
 from app.storage.reminders import ReminderStorage
-from app.storage.pending_responses import PendingResponseStorage
 from app.storage.pending_reminder_confirm import PendingReminderConfirmation
 from app.storage.summary_groups import SummaryGroupStorage
 from app.scheduler.service import ReminderScheduler
@@ -56,20 +55,9 @@ async def lifespan(app: FastAPI):
     bot = await create_bot(settings)
     dp = create_dispatcher()
 
-    # Initialize reminder storages and scheduler
+    # Initialize reminder storage
     reminder_storage = ReminderStorage(redis)
-    pending_storage = PendingResponseStorage(redis)
     
-    reminder_scheduler = ReminderScheduler(
-        redis_url=settings.redis_url,
-        bot=bot,
-        reminder_storage=reminder_storage,
-        pending_storage=pending_storage,
-        token_storage=token_storage,
-    )
-    await reminder_scheduler.start()
-    logger.info("Reminder scheduler started")
-
     # Initialize pending reminder confirmation storage
     pending_confirm = PendingReminderConfirmation(redis)
 
@@ -77,13 +65,24 @@ async def lifespan(app: FastAPI):
     tool_registry = init_tool_registry(redis, token_storage, pending_confirm)
     logger.info(f"Loaded tools: {tool_registry.tool_names}")
 
-    # Initialize LLM client
+    # Initialize LLM client (needed for scheduler)
     llm_client = LLMClient(
         settings=settings,
         redis=redis,
         tool_registry=tool_registry,
     )
     logger.info(f"LLM client initialized (model: {settings.llm_model})")
+
+    # Initialize reminder scheduler with LLM client
+    reminder_scheduler = ReminderScheduler(
+        redis_url=settings.redis_url,
+        bot=bot,
+        reminder_storage=reminder_storage,
+        token_storage=token_storage,
+        llm_client=llm_client,
+    )
+    await reminder_scheduler.start()
+    logger.info("Reminder scheduler started")
 
     # Initialize summarization worker
     from app.llm.summarization_worker import SummarizationWorker
@@ -96,7 +95,6 @@ async def lifespan(app: FastAPI):
     dp.workflow_data["llm_client"] = llm_client
     dp.workflow_data["tool_registry"] = tool_registry
     dp.workflow_data["reminder_scheduler"] = reminder_scheduler
-    dp.workflow_data["pending_storage"] = pending_storage
     dp.workflow_data["pending_confirm"] = pending_confirm
     dp.workflow_data["reminder_storage"] = reminder_storage
     

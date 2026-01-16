@@ -1,12 +1,8 @@
 """Application constants."""
 
-# Reminder system tags
-# These tags are used in Google Calendar event descriptions to identify reminder types
-REMINDER_TAG = "#напоминание"
+# Google Calendar for reminders (separate from primary calendar)
+REMINDERS_CALENDAR_NAME = "Напоминания"
 
-# Future tags can be added here:
-# JOURNAL_TAG = "#дневник"
-# TRACKER_TAG = "#трекер"
+# Event description contains LLM prompt
+# Recurrence is set natively via Google Calendar UI (RRULE)
 
-# All supported reminder tags
-REMINDER_TAGS = [REMINDER_TAG]

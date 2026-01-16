@@ -34,16 +34,7 @@ class TasksService:
         credentials: Credentials,
         max_results: int = 10,
     ) -> list[dict[str, Any]]:
-        """
-        List all task lists.
-
-        Args:
-            credentials: Valid Google credentials
-            max_results: Maximum number of task lists
-
-        Returns:
-            List of task list dictionaries
-        """
+        """List all task lists."""
         service = self._get_service(credentials)
 
         try:
@@ -57,17 +48,13 @@ class TasksService:
             logger.debug(f"Retrieved {len(tasklists)} task lists")
 
             return [
-                {
-                    "id": tl.get("id"),
-                    "title": tl.get("title"),
-                }
+                {"id": tl.get("id"), "title": tl.get("title")}
                 for tl in tasklists
             ]
 
         except HttpError as e:
             logger.error(f"Tasks API error: {e}")
             raise
-
     async def list_tasks(
         self,
         credentials: Credentials,
