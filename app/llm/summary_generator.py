@@ -3,7 +3,7 @@
 import logging
 from typing import Any
 
-from openai import AsyncOpenAI
+from langfuse.openai import AsyncOpenAI
 
 from app.config import Settings
 

@@ -724,6 +724,11 @@ async def handle_text_message(
             await message.answer(msg_text, reply_markup=keyboard)
             return
         
+        # Handle auth_required - send constant message without adding to history
+        if isinstance(response, dict) and response.get("type") == "auth_required":
+            await message.answer(response.get("message", ""))
+            return
+        
         # Send response as plain text
         if len(response) > 4096:
             for i in range(0, len(response), 4096):

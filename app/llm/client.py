@@ -5,7 +5,7 @@ import logging
 from datetime import datetime, timezone
 from typing import Any
 
-from openai import AsyncOpenAI
+from langfuse.openai import AsyncOpenAI
 from redis.asyncio import Redis
 
 from app.config import Settings
@@ -111,7 +111,9 @@ class LLMClient:
         if include_datetime:
             tzinfo = to_tzinfo(tz_name)
             if tzinfo is None:
-                logger.warning(f"Invalid timezone provided: {tz_name}, using UTC fallback")
+                logger.warning(
+                    f"Invalid timezone provided: {tz_name}, using UTC fallback"
+                )
             if tzinfo:
                 now = datetime.now(tzinfo).astimezone(tzinfo)
             else:
@@ -119,7 +121,9 @@ class LLMClient:
             tz_offset = now.strftime("%z")  # e.g., "+0500"
             tz_formatted = f"{tz_offset[:3]}:{tz_offset[3:]}"  # e.g., "+05:00"
             now_str = now.strftime("%Y-%m-%d %H:%M:%S %z")
-            message = f"[Текущее время: {now_str}, часовой пояс: {tz_formatted}]\n\n{message}"
+            message = (
+                f"[Текущее время: {now_str}, часовой пояс: {tz_formatted}]\n\n{message}"
+            )
 
         # Background worker handles TTL-based summarization via Redis keyspace notifications
         # Get conversation history
@@ -169,6 +173,7 @@ class LLMClient:
         Returns:
             API response
         """
+
         async def make_request():
             return await self.client.chat.completions.create(
                 model=self.settings.llm_model,
@@ -205,7 +210,7 @@ class LLMClient:
             return "Извините, произошла ошибка при обработке запроса."
 
         message = response.choices[0].message
-        
+
         # Check for tool calls
         if message.tool_calls:
             # Full message for API and history (with all tool call details)
@@ -244,30 +249,49 @@ class LLMClient:
                         user_id=user_id,
                         arguments=arguments,
                     )
-                    
+
                     # Special handling for respond_to_user tool
-                    if tool_name == "respond_to_user" and result.get("type") == "user_response":
+                    if (
+                        tool_name == "respond_to_user"
+                        and result.get("type") == "user_response"
+                    ):
                         user_response = result.get("response", "")
                         # Save the actual response to history
-                        await self.history.append(user_id, {"role": "assistant", "content": user_response})
+                        await self.history.append(
+                            user_id, {"role": "assistant", "content": user_response}
+                        )
                         return user_response
-                    
+
                     # Special handling for tools that need user confirmation
-                    if result.get("needs_confirmation") and result.get("confirmation_id"):
+                    if result.get("needs_confirmation") and result.get(
+                        "confirmation_id"
+                    ):
                         # Return structured response for handler to add buttons
                         return {
                             "type": "needs_confirmation",
                             "confirmation_id": result["confirmation_id"],
                             "message": result.get("message", "Подтвердите действие"),
                         }
-                    
+
+                    # Special handling for not_authorized - return constant message without history
+                    if result.get("error") == "not_authorized":
+                        from app.constants import AUTH_REQUIRED_MESSAGE
+
+                        return {
+                            "type": "auth_required",
+                            "message": AUTH_REQUIRED_MESSAGE,
+                        }
+
                     result_str = json.dumps(result, ensure_ascii=False)
                 except Exception as e:
                     logger.error(f"Tool {tool_name} failed: {e}")
-                    result_str = json.dumps({
-                        "success": False,
-                        "error": str(e),
-                    }, ensure_ascii=False)
+                    result_str = json.dumps(
+                        {
+                            "success": False,
+                            "error": str(e),
+                        },
+                        ensure_ascii=False,
+                    )
 
                 # Add tool result to history (both in-memory and Redis)
                 tool_message = {
@@ -290,10 +314,10 @@ class LLMClient:
 
         # No tool calls, return the response
         content = message.content or ""
-        
+
         # Save assistant response to history
         await self.history.append(user_id, {"role": "assistant", "content": content})
-        
+
         return content
 
     async def clear_history(self, user_id: int) -> None:

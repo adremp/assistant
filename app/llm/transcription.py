@@ -4,7 +4,7 @@ import logging
 import tempfile
 from pathlib import Path
 
-from openai import AsyncOpenAI
+from langfuse.openai import AsyncOpenAI
 
 from app.config import Settings
 
@@ -40,7 +40,7 @@ class TranscriptionService:
         """
         # Save to temp file (Groq API requires file path)
         suffix = Path(filename).suffix or ".ogg"
-        
+
         with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as temp_file:
             temp_file.write(audio_data)
             temp_path = temp_file.name
@@ -52,11 +52,11 @@ class TranscriptionService:
                     file=audio_file,
                     language="ru",  # Optimize for Russian
                 )
-            
+
             text = transcription.text.strip()
             logger.info(f"Transcribed audio: {text[:50]}...")
             return text
-            
+
         except Exception as e:
             logger.error(f"Transcription failed: {e}")
             raise
