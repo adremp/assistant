@@ -10,7 +10,7 @@ on:
   workflow_dispatch:
 
 env:
-  DOCKER_IMAGE: ${{ secrets.DOCKER_USERNAME }}/assistant
+  DOCKER_REGISTRY: ${{ secrets.DOCKER_USERNAME }}
 
 jobs:
   # LLM Code Review on Pull Requests
@@ -41,9 +41,21 @@ jobs:
         run: node .github/scripts/llm-review.js
 
   build-and-push:
-    name: Build and Push to Docker Hub
+    name: Build and Push Images
     runs-on: ubuntu-latest
     if: github.event_name == 'push' && github.ref == 'refs/heads/master'
+    strategy:
+      matrix:
+        include:
+          - name: assistant-core
+            context: .
+            dockerfile: internal/core/Dockerfile
+          - name: mcp-google
+            context: .
+            dockerfile: internal/mcp/google/Dockerfile
+          - name: mcp-summaries
+            context: .
+            dockerfile: internal/mcp/summaries/Dockerfile
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -57,16 +69,17 @@ jobs:
           username: ${{ secrets.DOCKER_USERNAME }}
           password: ${{ secrets.DOCKER_PASSWORD }}
 
-      - name: Build and push
+      - name: Build and push ${{ matrix.name }}
         uses: docker/build-push-action@v6
         with:
-          context: .
+          context: ${{ matrix.context }}
+          file: ${{ matrix.dockerfile }}
           push: true
           tags: |
-            ${{ env.DOCKER_IMAGE }}:${{ github.sha }}
-            ${{ env.DOCKER_IMAGE }}:latest
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+            ${{ env.DOCKER_REGISTRY }}/${{ matrix.name }}:${{ github.sha }}
+            ${{ env.DOCKER_REGISTRY }}/${{ matrix.name }}:latest
+          cache-from: type=gha,scope=${{ matrix.name }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.name }}
 
   deploy:
     name: Deploy to VPS
@@ -77,13 +90,13 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Copy docker-compose via SCP
+      - name: Copy deployment files via SCP
         uses: appleboy/scp-action@v0.1.7
         with:
           host: ${{ secrets.VPS_HOST }}
           username: ${{ secrets.VPS_USER }}
           key: ${{ secrets.SSH_PRIVATE_KEY }}
-          source: "docker-compose.yml"
+          source: "docker-compose.yml,internal/core/docker-compose.yml,internal/mcp/google/docker-compose.yml,internal/mcp/summaries/docker-compose.yml"
           target: "/home/${{ secrets.VPS_USER }}/assistant"
           strip_components: 0
 
@@ -111,8 +124,21 @@ jobs:
             # Login to Docker Hub
             echo "${{ secrets.DOCKER_PASSWORD }}" | docker login -u "${{ secrets.DOCKER_USERNAME }}" --password-stdin
             
-            # Pull and restart
-            docker compose pull
+            # Update image references in docker-compose files (use pre-built images)
+            export DOCKER_REGISTRY="${{ env.DOCKER_REGISTRY }}"
+            export IMAGE_TAG="${{ github.sha }}"
+            
+            # Pull pre-built images
+            docker pull $DOCKER_REGISTRY/assistant-core:$IMAGE_TAG
+            docker pull $DOCKER_REGISTRY/mcp-google:$IMAGE_TAG
+            docker pull $DOCKER_REGISTRY/mcp-summaries:$IMAGE_TAG
+            
+            # Tag as expected service names
+            docker tag $DOCKER_REGISTRY/assistant-core:$IMAGE_TAG assistant-assistant-core:latest
+            docker tag $DOCKER_REGISTRY/mcp-google:$IMAGE_TAG assistant-mcp-google:latest
+            docker tag $DOCKER_REGISTRY/mcp-summaries:$IMAGE_TAG assistant-mcp-summaries:latest
+            
+            # Start services (will use local tagged images)
             docker compose up -d --remove-orphans
             
             # Cleanup
@@ -123,4 +149,3 @@ jobs:
           sleep 30
           curl -f http://${{ secrets.VPS_HOST }}:8000/health || echo "Health check failed"
         continue-on-error: true
-
