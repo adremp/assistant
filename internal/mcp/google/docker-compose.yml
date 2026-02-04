@@ -1,0 +1,18 @@
+services:
+  mcp-google:
+    build:
+      context: ../../..
+      dockerfile: internal/mcp/google/Dockerfile
+    restart: unless-stopped
+    environment:
+      - REDIS_URL=redis://assistant-redis:6379/0
+      - TOKEN_TTL_SECONDS=${TOKEN_TTL_SECONDS:-2592000}
+      - GOOGLE_CREDENTIALS_PATH=/app/credentials.json
+      - GOOGLE_REDIRECT_URI=${GOOGLE_REDIRECT_URI}
+    volumes:
+      - ../../../credentials.json:/app/credentials.json:ro
+    depends_on:
+      assistant-redis:
+        condition: service_healthy
+    networks:
+      - bot-network

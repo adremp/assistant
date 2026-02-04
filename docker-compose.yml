@@ -1,50 +1,14 @@
-services:
-  app:
-    image: ${DOCKER_IMAGE:-assistant:local}
-    build:
-      context: .
-      dockerfile: Dockerfile
-    restart: unless-stopped
-    ports:
-      - "8000:8000"
-    environment:
-      - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN}
-      - TELEGRAM_WEBHOOK_URL=${TELEGRAM_WEBHOOK_URL}
-      - TELEGRAM_WEBHOOK_SECRET=${TELEGRAM_WEBHOOK_SECRET}
-      - GOOGLE_CREDENTIALS_PATH=/app/credentials.json
-      - GOOGLE_REDIRECT_URI=${GOOGLE_REDIRECT_URI}
-      - telethon_api_id=${telethon_api_id}
-      - telethon_api_hash=${telethon_api_hash}
-      - LLM_API_KEY=${LLM_API_KEY}
-      - LLM_BASE_URL=${LLM_BASE_URL:-https://api.x.ai/v1}
-      - LLM_MODEL=${LLM_MODEL:-grok-3}
-      - LLM_TEMPERATURE=${LLM_TEMPERATURE:-0.7}
-      - REDIS_URL=redis://assistant-redis:6379/0
-      - CONVERSATION_TTL_SECONDS=${CONVERSATION_TTL_SECONDS:-86400}
-      - TOKEN_TTL_SECONDS=${TOKEN_TTL_SECONDS:-2592000}
-      - LANGFUSE_BASE_URL=${LANGFUSE_BASE_URL}
-      - LANGFUSE_SECRET_KEY=${LANGFUSE_SECRET_KEY}
-      - LANGFUSE_PUBLIC_KEY=${LANGFUSE_PUBLIC_KEY}
-    volumes:
-      - ./credentials.json:/app/credentials.json:ro
-    depends_on:
-      assistant-redis:
-        condition: service_healthy
-    networks:
-      - bot-network
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 10s
+include:
+  - internal/core/docker-compose.yml
+  - internal/mcp/google/docker-compose.yml
+  - internal/mcp/summaries/docker-compose.yml
 
+services:
   assistant-redis:
     image: redis:7-alpine
     restart: unless-stopped
     volumes:
       - redis-data:/data
-    # Enable keyspace notifications for expired keys (Ex)
     command: redis-server --appendonly yes --notify-keyspace-events Ex
     networks:
       - bot-network

@@ -1,0 +1,36 @@
+services:
+  assistant-core:
+    build:
+      context: ../..
+      dockerfile: internal/core/Dockerfile
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    environment:
+      - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN}
+      - GOOGLE_CREDENTIALS_PATH=/app/credentials.json
+      - GOOGLE_REDIRECT_URI=${GOOGLE_REDIRECT_URI}
+      - LLM_API_KEY=${LLM_API_KEY}
+      - LLM_BASE_URL=${LLM_BASE_URL:-https://api.x.ai/v1}
+      - LLM_MODEL=${LLM_MODEL:-grok-3}
+      - LLM_TEMPERATURE=${LLM_TEMPERATURE:-0.7}
+      - LLM_TIMEOUT=${LLM_TIMEOUT:-30.0}
+      - LLM_TPM_LIMIT=${LLM_TPM_LIMIT:-100000}
+      - REDIS_URL=redis://assistant-redis:6379/0
+      - TOKEN_TTL_SECONDS=${TOKEN_TTL_SECONDS:-2592000}
+      - MCP_GOOGLE_URL=http://mcp-google:8000/mcp
+      - MCP_SUMMARIES_URL=http://mcp-summaries:8000/mcp
+      - LANGFUSE_PUBLIC_KEY=${LANGFUSE_PUBLIC_KEY:-}
+      - LANGFUSE_SECRET_KEY=${LANGFUSE_SECRET_KEY:-}
+      - LANGFUSE_HOST=${LANGFUSE_HOST:-}
+    volumes:
+      - ../../credentials.json:/app/credentials.json:ro
+    depends_on:
+      assistant-redis:
+        condition: service_healthy
+      mcp-google:
+        condition: service_started
+      mcp-summaries:
+        condition: service_started
+    networks:
+      - bot-network

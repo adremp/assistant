@@ -1,0 +1,22 @@
+services:
+  mcp-summaries:
+    build:
+      context: ../../..
+      dockerfile: internal/mcp/summaries/Dockerfile
+    restart: unless-stopped
+    environment:
+      - REDIS_URL=redis://assistant-redis:6379/0
+      - TOKEN_TTL_SECONDS=${TOKEN_TTL_SECONDS:-2592000}
+      - TELETHON_API_ID=${TELETHON_API_ID}
+      - TELETHON_API_HASH=${TELETHON_API_HASH}
+      - LLM_API_KEY=${LLM_API_KEY}
+      - LLM_BASE_URL=${LLM_BASE_URL:-https://api.x.ai/v1}
+      - LLM_MODEL=${LLM_MODEL:-grok-3}
+      - LLM_TEMPERATURE=${LLM_TEMPERATURE:-0.7}
+      - LLM_TIMEOUT=${LLM_TIMEOUT:-30.0}
+      - LLM_TPM_LIMIT=${LLM_TPM_LIMIT:-100000}
+    depends_on:
+      assistant-redis:
+        condition: service_healthy
+    networks:
+      - bot-network

@@ -1,42 +1,16 @@
 [project]
-name = "assistant"
+name = "assistant-monorepo"
 version = "0.1.0"
-description = "Telegram bot with Google Calendar/Tasks integration and Grok LLM"
+description = "Telegram bot monorepo with MCP microservices architecture"
 readme = "README.md"
 requires-python = ">=3.13"
-dependencies = [
-    # Web server
-    "fastapi>=0.115.0",
-    "uvicorn[standard]>=0.30.0",
-    # Telegram
-    "aiogram>=3.13.0",
-    "telethon>=1.36.0",  # MTProto client for channel history
-    # Google APIs
-    "google-api-python-client>=2.150.0",
-    "google-auth-oauthlib>=1.2.0",
-    # Notion API
-    "notion-client>=2.0.0",
-    # LLM (OpenAI SDK for Grok/other providers)
-    "openai>=1.50.0",
-    # Configuration
-    "pydantic-settings>=2.5.0",
-    # Storage
-    "redis>=5.0.0",
-    # Scheduler
-    "apscheduler>=4.0.0a6",
-    "aiofiles>=24.1.0",
-    # Future: PostgreSQL + pgvector for RAG
-    # "asyncpg>=0.29.0",
-    # "pgvector>=0.3.0",
-    # "sqlalchemy>=2.0.0",
-    "fastapi-cli>=0.0.20",
-    "tzdata>=2025.3",
-    "langfuse>=3.12.0",
-]
+# Dependencies are managed per-module in:
+# - pkg/pyproject.toml
+# - internal/core/pyproject.toml
+# - internal/mcp/google/pyproject.toml
+# - internal/mcp/summaries/pyproject.toml
+dependencies = []
 
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
-
-[tool.hatch.build.targets.wheel]
-packages = ["app"]
