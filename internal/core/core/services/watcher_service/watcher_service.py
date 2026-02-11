@@ -1,4 +1,4 @@
-"""Watcher scheduler - periodically checks watchers and sends filtered messages."""
+"""Watcher service - periodically checks watchers and sends filtered messages."""
 
 import asyncio
 import json
@@ -10,7 +10,7 @@ from aiogram import Bot
 from redis.asyncio import Redis
 
 from core.config import Settings
-from core.mcp_client.manager import MCPClientManager
+from core.repository.mcp_repo import MCPRepository
 from pkg.watcher_storage import WatcherStorage
 
 _langfuse_host = os.getenv("LANGFUSE_HOST", "")
@@ -27,16 +27,16 @@ LLM_FILTER_SYSTEM_PROMPT = """Ты фильтр сообщений. Получа
 Ответь ТОЛЬКО JSON-массивом номеров, без пояснений."""
 
 
-class WatcherScheduler:
+class WatcherService:
     def __init__(
         self,
         bot: Bot,
-        mcp_manager: MCPClientManager,
+        mcp_repo: MCPRepository,
         settings: Settings,
         redis: Redis,
     ):
         self.bot = bot
-        self.mcp_manager = mcp_manager
+        self.mcp_repo = mcp_repo
         self.settings = settings
         self.redis = redis
         self._running = False
@@ -44,7 +44,7 @@ class WatcherScheduler:
     async def start(self):
         """Start the background scheduler loop."""
         self._running = True
-        logger.info("WatcherScheduler started")
+        logger.info("WatcherService started")
         while self._running:
             try:
                 await self._tick()
@@ -52,7 +52,7 @@ class WatcherScheduler:
                 self._running = False
                 break
             except Exception as e:
-                logger.error(f"WatcherScheduler tick error: {e}", exc_info=True)
+                logger.error(f"WatcherService tick error: {e}", exc_info=True)
             await asyncio.sleep(self.settings.watcher_check_interval_seconds)
 
     async def _tick(self):
@@ -92,8 +92,7 @@ class WatcherScheduler:
 
         logger.info(f"Processing watcher {watcher_id} for user {user_id}")
 
-        # Fetch new messages via MCP tool
-        result = await self.mcp_manager.call_tool(
+        result = await self.mcp_repo.call_tool(
             "fetch_new_chat_messages",
             {
                 "user_id": user_id,
@@ -109,7 +108,6 @@ class WatcherScheduler:
         messages = result.get("messages", [])
         new_last_ids = result.get("last_message_ids", last_message_ids)
 
-        # Update last_check and last_message_ids regardless of messages
         storage = WatcherStorage(self.redis)
         await storage.update_last_check(
             watcher_id,
@@ -121,14 +119,12 @@ class WatcherScheduler:
             logger.info(f"Watcher {watcher_id}: no new messages")
             return
 
-        # Filter messages through LLM
         filtered = await self._filter_messages_with_llm(messages, prompt)
 
         if not filtered:
             logger.info(f"Watcher {watcher_id}: no messages matched the prompt")
             return
 
-        # Send results to user
         await self._send_results(user_id, watcher.get("name", "Unnamed"), filtered)
 
     async def _filter_messages_with_llm(
@@ -139,7 +135,6 @@ class WatcherScheduler:
         if not messages:
             return []
 
-        # Build lines for each message
         msg_lines = []
         for msg in messages:
             chat_title = msg.get("chat_title", "?")
@@ -148,9 +143,8 @@ class WatcherScheduler:
             date = msg.get("date", "")
             msg_lines.append(f"[{chat_title}] {sender}: {text} ({date})")
 
-        # Split into batches (~4 chars per token, keep under 5000 tokens per batch)
         max_chars_per_batch = 16000
-        batches: list[list[int]] = []  # list of [original_index, ...]
+        batches: list[list[int]] = []
         current_batch: list[int] = []
         current_chars = 0
 
@@ -223,7 +217,6 @@ class WatcherScheduler:
             if not isinstance(indices, list):
                 return []
 
-            # Map 1-based batch numbers back to original messages
             filtered = []
             for num in indices:
                 if isinstance(num, int) and 1 <= num <= len(batch_indices):
@@ -240,18 +233,17 @@ class WatcherScheduler:
         self, user_id: int, watcher_name: str, messages: list[dict]
     ):
         """Send filtered messages to user via Bot."""
-        parts = [f"🔍 Мониторинг \"{watcher_name}\"\nНайдено {len(messages)} сообщений:\n"]
+        parts = [f"\U0001f50d Мониторинг \"{watcher_name}\"\nНайдено {len(messages)} сообщений:\n"]
 
         for msg in messages:
             chat_title = msg.get("chat_title", "?")
             sender = msg.get("sender", "?")
             text = msg.get("text", "")
             date = msg.get("date", "")
-            parts.append(f"📌 [{chat_title}] {sender}: {text}\n   {date}")
+            parts.append(f"\U0001f4cc [{chat_title}] {sender}: {text}\n   {date}")
 
         text = "\n\n".join(parts)
 
-        # Telegram message limit is 4096 chars
         if len(text) > 4096:
             text = text[:4090] + "\n..."
 

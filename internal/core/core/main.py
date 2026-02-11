@@ -1,17 +1,23 @@
 """Main FastAPI application for core module with MCP integration."""
 
+import asyncio
 import logging
 from contextlib import asynccontextmanager
 
-from aiogram import Bot
-from fastapi import FastAPI, Request
-from fastapi.responses import HTMLResponse
+from fastapi import FastAPI
 from pkg.token_storage import TokenStorage
 from redis.asyncio import Redis
 
 from core.config import Settings, get_settings
-from core.llm.client import LLMClient
-from core.mcp_client.manager import HybridToolRegistry, MCPClientManager
+from core.handlers.http_handler import setup_routes
+from core.repository.conversation_repo import ConversationRepository
+from core.repository.google_auth_repo import GoogleAuthRepository
+from core.repository.llm_repo import LLMRepository
+from core.repository.mcp_repo import MCPRepository
+from core.services.auth_service import AuthService
+from core.services.chat_service import ChatService
+from core.services.tool_registry import ToolRegistry
+from core.services.watcher_service import WatcherService
 from core.telegram.bot import create_bot, create_dispatcher
 
 logging.basicConfig(
@@ -35,60 +41,59 @@ async def lifespan(app: FastAPI):
     # Initialize token storage
     token_storage = TokenStorage(redis, ttl=settings.token_ttl_seconds)
 
-    # Initialize MCP client manager and connect to servers
-    mcp_manager = MCPClientManager()
+    # Repositories
+    mcp_repo = MCPRepository()
 
-    # Connect to MCP servers (graceful degradation if unavailable)
     try:
-        await mcp_manager.connect("google", settings.mcp_google_url)
+        await mcp_repo.connect("google", settings.mcp_google_url)
     except Exception as e:
         logger.warning(f"Failed to connect to mcp-google: {e}")
 
     try:
-        await mcp_manager.connect("summaries", settings.mcp_summaries_url)
+        await mcp_repo.connect("summaries", settings.mcp_summaries_url)
     except Exception as e:
         logger.warning(f"Failed to connect to mcp-summaries: {e}")
 
-    logger.info(f"MCP client initialized with {len(mcp_manager.tool_names)} tools")
+    logger.info(f"MCP repository initialized with {len(mcp_repo.tool_names)} tools")
 
-    # Initialize hybrid tool registry (local tools + MCP tools)
-    tool_registry = HybridToolRegistry(mcp_manager)
+    conversation_repo = ConversationRepository(redis, settings.conversation_ttl_seconds)
+    llm_repo = LLMRepository(settings)
+    google_auth_repo = GoogleAuthRepository(settings, token_storage)
 
-    # Initialize LLM client
-    llm_client = LLMClient(settings, redis, tool_registry)
-    logger.info("LLM client initialized")
+    # Services
+    tool_registry = ToolRegistry(mcp_repo)
+    chat_service = ChatService(llm_repo, conversation_repo, tool_registry, settings)
+    auth_service = AuthService(google_auth_repo)
 
     # Create Telegram bot and dispatcher
     bot = await create_bot(settings)
     dp = create_dispatcher()
 
-    # Workflow data for dependency injection (without bot - passed separately)
+    watcher_service = WatcherService(bot, mcp_repo, settings, redis)
+
+    # Workflow data for aiogram DI
     workflow_data = {
         "redis": redis,
         "settings": settings,
         "token_storage": token_storage,
-        "llm_client": llm_client,
+        "chat_service": chat_service,
+        "auth_service": auth_service,
         "tool_registry": tool_registry,
-        "mcp_manager": mcp_manager,
+        "mcp_repo": mcp_repo,
     }
 
-    # Store in app state (include bot here for OAuth callback)
+    # Store in app state
     app.state.workflow_data = {**workflow_data, "bot": bot}
     app.state.bot = bot
     app.state.dp = dp
 
     # Start polling in background
-    import asyncio
-
     polling_task = asyncio.create_task(dp.start_polling(bot, **workflow_data))
     logger.info("Telegram polling started")
 
     # Start watcher scheduler
-    from core.scheduler.watcher_scheduler import WatcherScheduler
-
-    scheduler = WatcherScheduler(bot, mcp_manager, settings, redis)
-    scheduler_task = asyncio.create_task(scheduler.start())
-    logger.info("Watcher scheduler started")
+    scheduler_task = asyncio.create_task(watcher_service.start())
+    logger.info("Watcher service started")
 
     yield
 
@@ -117,62 +122,7 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
-
-@app.get("/health")
-async def health_check():
-    """Health check endpoint."""
-    return {"status": "ok"}
-
-
-@app.get("/oauth/callback")
-async def oauth_callback(request: Request, code: str, state: str):
-    """Handle Google OAuth callback."""
-    from core.google.auth import GoogleAuthService
-
-    settings: Settings = request.app.state.workflow_data["settings"]
-    token_storage: TokenStorage = request.app.state.workflow_data["token_storage"]
-    bot: Bot = request.app.state.bot
-
-    auth_service = GoogleAuthService(settings, token_storage)
-
-    try:
-        # Exchange code for tokens
-        success = await auth_service.handle_callback(code, state)
-
-        if success:
-            # Parse user_id from state
-            user_id = int(state)
-
-            # Send confirmation to user
-            await bot.send_message(
-                user_id,
-                "✅ Авторизация прошла успешно! Теперь вы можете использовать Google Calendar и Tasks.",
-            )
-
-            return HTMLResponse(
-                content="""
-                <html>
-                <head><title>Авторизация</title></head>
-                <body style="font-family: sans-serif; text-align: center; margin-top: 50px;">
-                    <h1>✅ Успешно!</h1>
-                    <p>Авторизация завершена. Вернитесь в Telegram.</p>
-                </body>
-                </html>
-                """,
-                status_code=200,
-            )
-        else:
-            return HTMLResponse(
-                content="<h1>Ошибка авторизации</h1>",
-                status_code=400,
-            )
-
-    except Exception as e:
-        logger.error(f"OAuth callback error: {e}")
-        return HTMLResponse(
-            content=f"<h1>Ошибка</h1><p>{str(e)}</p>",
-            status_code=500,
-        )
+setup_routes(app)
 
 
 if __name__ == "__main__":

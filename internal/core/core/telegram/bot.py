@@ -10,15 +10,7 @@ logger = logging.getLogger(__name__)
 
 
 async def create_bot(settings: Settings) -> Bot:
-    """
-    Create and configure Telegram bot.
-
-    Args:
-        settings: Application settings
-
-    Returns:
-        Configured Bot instance
-    """
+    """Create and configure Telegram bot."""
     bot = Bot(
         token=settings.telegram_bot_token,
     )
@@ -27,19 +19,13 @@ async def create_bot(settings: Settings) -> Bot:
 
 
 def create_dispatcher() -> Dispatcher:
-    """
-    Create and configure dispatcher with routers.
-
-    Returns:
-        Configured Dispatcher instance
-    """
-    from core.telegram.handlers import router
+    """Create and configure dispatcher with routers."""
+    from core.handlers.telegram_handler import router
     from core.telegram.middleware import LoggingMiddleware
 
     dp = Dispatcher()
     dp.include_router(router)
 
-    # Add middleware
     dp.message.middleware(LoggingMiddleware())
 
     logger.info("Dispatcher created with handlers")

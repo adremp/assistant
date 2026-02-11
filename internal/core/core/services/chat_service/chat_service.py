@@ -1,25 +1,18 @@
-"""LLM client for Grok/OpenAI-compatible APIs with tool calling."""
+"""Chat service - orchestrates LLM conversation with tool calling."""
 
 import json
 import logging
-import os
 from datetime import datetime, timezone
 from typing import Any
 
 from pkg.timezone import to_tzinfo
-from redis.asyncio import Redis
 
 from core.config import Settings
-from core.llm.history import ConversationHistory
-from core.llm.retry import RetryHandler
-from core.mcp_client.manager import HybridToolRegistry
-
-# Use Langfuse-wrapped client only if properly configured
-_langfuse_host = os.getenv("LANGFUSE_HOST", "")
-if _langfuse_host:
-    from langfuse.openai import AsyncOpenAI
-else:
-    from openai import AsyncOpenAI
+from core.constants import AUTH_REQUIRED_MESSAGE
+from core.repository.conversation_repo import ConversationRepository
+from core.repository.llm_repo import LLMRepository
+from core.services.chat_service.dto import ChatResult
+from core.services.tool_registry import ToolRegistry
 
 logger = logging.getLogger(__name__)
 
@@ -74,58 +67,32 @@ Message formatting rules:
 - Markdown is strictly prohibited"""
 
 
-class LLMClient:
-    """Async client for LLM API with tool calling support."""
+class ChatService:
+    """Orchestrates LLM conversation: history management, tool calling loop, response."""
 
     def __init__(
         self,
+        llm_repo: LLMRepository,
+        conversation_repo: ConversationRepository,
+        tool_registry: ToolRegistry,
         settings: Settings,
-        redis: Redis,
-        tool_registry: HybridToolRegistry,
     ):
-        """
-        Initialize LLM client.
-
-        Args:
-            settings: Application settings
-            redis: Redis client
-            tool_registry: Hybrid tool registry (local + MCP tools)
-        """
-        self.settings = settings
-        self.client = AsyncOpenAI(
-            api_key=settings.llm_api_key,
-            base_url=settings.llm_base_url,
-            timeout=settings.llm_timeout,
-        )
-        self.history = ConversationHistory(redis, settings.conversation_ttl_seconds)
-        self.retry_handler = RetryHandler(
-            max_retries=settings.llm_max_retries,
-        )
+        self.llm_repo = llm_repo
+        self.conversation_repo = conversation_repo
         self.tool_registry = tool_registry
+        self.settings = settings
 
-    async def chat(
+    async def process_message(
         self,
         user_id: int,
         message: str,
         include_datetime: bool = True,
         user_timezone: str | None = None,
-    ) -> str:
-        """
-        Send a message and get a response, handling tool calls.
-
-        Args:
-            user_id: Telegram user ID
-            message: User message
-            include_datetime: Whether to include current datetime in message
-            user_timezone: Optional user timezone (IANA or offset) to inject into system prompt and context
-
-        Returns:
-            Assistant response text
-        """
+    ) -> str | dict:
+        """Send a message and get a response, handling tool calls."""
         tz_name = user_timezone or "unknown"
         system_prompt = SYSTEM_PROMPT_TEMPLATE.format(user_timezone=tz_name)
 
-        # Add current datetime context with timezone
         if include_datetime:
             tzinfo = to_tzinfo(tz_name)
             if tzinfo is None:
@@ -136,36 +103,30 @@ class LLMClient:
                 now = datetime.now(tzinfo).astimezone(tzinfo)
             else:
                 now = datetime.now(timezone.utc)
-            tz_offset = now.strftime("%z")  # e.g., "+0500"
-            tz_formatted = f"{tz_offset[:3]}:{tz_offset[3:]}"  # e.g., "+05:00"
+            tz_offset = now.strftime("%z")
+            tz_formatted = f"{tz_offset[:3]}:{tz_offset[3:]}"
             now_str = now.strftime("%Y-%m-%d %H:%M:%S %z")
             message = (
                 f"[Текущее время: {now_str}, часовой пояс: {tz_formatted}]\n\n{message}"
             )
 
-        # Get conversation history
-        history = await self.history.get(user_id)
+        history = await self.conversation_repo.get(user_id)
 
-        # Ensure system message is set
         if (
             not history
             or history[0].get("role") != "system"
             or history[0].get("content") != system_prompt
         ):
-            await self.history.set_system_message(user_id, system_prompt)
-            history = await self.history.get(user_id)
+            await self.conversation_repo.set_system_message(user_id, system_prompt)
+            history = await self.conversation_repo.get(user_id)
 
-        # Add user message
-        await self.history.append(user_id, {"role": "user", "content": message})
+        await self.conversation_repo.append(user_id, {"role": "user", "content": message})
         history.append({"role": "user", "content": message})
 
-        # Get tools
         tools = self.tool_registry.get_all_tools()
 
-        # Call LLM with retry
-        response = await self._call_llm(history, tools)
+        response = await self.llm_repo.chat_completion(history, tools)
 
-        # Process response (may include tool calls)
         final_response = await self._process_response(
             user_id=user_id,
             response=response,
@@ -175,31 +136,9 @@ class LLMClient:
 
         return final_response
 
-    async def _call_llm(
-        self,
-        messages: list[dict[str, Any]],
-        tools: list[dict[str, Any]],
-    ) -> Any:
-        """
-        Call LLM API with retry logic.
-
-        Args:
-            messages: Conversation messages
-            tools: Available tools
-
-        Returns:
-            API response
-        """
-
-        async def make_request():
-            return await self.client.chat.completions.create(
-                model=self.settings.llm_model,
-                messages=messages,
-                tools=tools if tools else None,
-                temperature=self.settings.llm_temperature,
-            )
-
-        return await self.retry_handler.execute(make_request)
+    async def clear_history(self, user_id: int) -> None:
+        await self.conversation_repo.clear(user_id)
+        logger.info(f"Cleared conversation history for user {user_id}")
 
     async def _process_response(
         self,
@@ -208,29 +147,15 @@ class LLMClient:
         history: list[dict[str, Any]],
         tools: list[dict[str, Any]],
         depth: int = 0,
-    ) -> str:
-        """
-        Process LLM response, handling tool calls recursively.
-
-        Args:
-            user_id: Telegram user ID
-            response: LLM API response
-            history: Current conversation history
-            tools: Available tools
-            depth: Recursion depth (max 5)
-
-        Returns:
-            Final assistant response text
-        """
+    ) -> str | dict:
+        """Process LLM response, handling tool calls recursively."""
         if depth > 5:
             logger.warning(f"Max tool call depth reached for user {user_id}")
             return "Извините, произошла ошибка при обработке запроса."
 
         message = response.choices[0].message
 
-        # Check for tool calls
         if message.tool_calls:
-            # Full message for API and history (with all tool call details)
             assistant_message_full = {
                 "role": "assistant",
                 "content": message.content or "",
@@ -247,10 +172,8 @@ class LLMClient:
                 ],
             }
             history.append(assistant_message_full)
-            # Save full message to Redis
-            await self.history.append(user_id, assistant_message_full)
+            await self.conversation_repo.append(user_id, assistant_message_full)
 
-            # Execute each tool call
             for tool_call in message.tool_calls:
                 tool_name = tool_call.function.name
                 try:
@@ -267,20 +190,14 @@ class LLMClient:
                         arguments=arguments,
                     )
 
-                    # Handle respond_to_user tool - it returns the response directly
                     if tool_name == "respond_to_user" and isinstance(result, str):
-                        # Save the actual response to history
-                        await self.history.append(
+                        await self.conversation_repo.append(
                             user_id, {"role": "assistant", "content": result}
                         )
                         return result
 
-                    # Handle MCP tool results (JSON)
                     if isinstance(result, dict):
-                        # Special handling for not_authorized - return constant message without history
                         if result.get("error") == "not_authorized":
-                            from core.constants import AUTH_REQUIRED_MESSAGE
-
                             return {
                                 "type": "auth_required",
                                 "message": AUTH_REQUIRED_MESSAGE,
@@ -292,24 +209,19 @@ class LLMClient:
                 except Exception as e:
                     logger.error(f"Tool {tool_name} failed: {e}")
                     result_str = json.dumps(
-                        {
-                            "success": False,
-                            "error": str(e),
-                        },
+                        {"success": False, "error": str(e)},
                         ensure_ascii=False,
                     )
 
-                # Add tool result to history (both in-memory and Redis)
                 tool_message = {
                     "role": "tool",
                     "tool_call_id": tool_call.id,
                     "content": result_str,
                 }
                 history.append(tool_message)
-                await self.history.append(user_id, tool_message)
+                await self.conversation_repo.append(user_id, tool_message)
 
-            # Call LLM again with tool results
-            response = await self._call_llm(history, tools)
+            response = await self.llm_repo.chat_completion(history, tools)
             return await self._process_response(
                 user_id=user_id,
                 response=response,
@@ -318,20 +230,6 @@ class LLMClient:
                 depth=depth + 1,
             )
 
-        # No tool calls, return the response
         content = message.content or ""
-
-        # Save assistant response to history
-        await self.history.append(user_id, {"role": "assistant", "content": content})
-
+        await self.conversation_repo.append(user_id, {"role": "assistant", "content": content})
         return content
-
-    async def clear_history(self, user_id: int) -> None:
-        """
-        Clear conversation history for a user.
-
-        Args:
-            user_id: Telegram user ID
-        """
-        await self.history.clear(user_id)
-        logger.info(f"Cleared conversation history for user {user_id}")

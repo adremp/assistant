@@ -1,4 +1,4 @@
-"""Telegram message handlers for core module."""
+"""Telegram message handlers - thin layer that delegates to services."""
 
 import asyncio
 import logging
@@ -13,8 +13,10 @@ from aiogram.types import (
 )
 from pkg.token_storage import TokenStorage
 
-from core.llm.client import LLMClient
-from core.llm.retry import RateLimitException
+from core.repository.llm_repo import RateLimitException
+from core.services.auth_service import AuthService
+from core.services.chat_service import ChatService
+from core.services.transcription_service import TranscriptionService
 
 logger = logging.getLogger(__name__)
 
@@ -22,7 +24,6 @@ router = Router(name="main")
 
 
 def get_main_keyboard() -> InlineKeyboardMarkup:
-    """Get main menu keyboard."""
     return InlineKeyboardMarkup(
         inline_keyboard=[
             [
@@ -41,7 +42,6 @@ def get_main_keyboard() -> InlineKeyboardMarkup:
 
 @router.message(CommandStart())
 async def handle_start(message: Message) -> None:
-    """Handle /start command."""
     user = message.from_user
     user_name = user.first_name if user else "друг"
 
@@ -59,7 +59,6 @@ async def handle_start(message: Message) -> None:
 
 @router.message(Command("help"))
 async def handle_help(message: Message) -> None:
-    """Handle /help command."""
     await message.answer(
         "📚 Справка\n\n"
         "Примеры запросов:\n"
@@ -81,19 +80,18 @@ async def handle_help(message: Message) -> None:
 @router.message(Command("timezone"))
 async def cmd_timezone(
     message: Message,
-    llm_client: LLMClient,
+    chat_service: ChatService,
     token_storage: TokenStorage,
 ) -> None:
-    """Update user timezone via LLM/MCP."""
     user_id = message.from_user.id if message.from_user else 0
 
     if message.bot:
         await message.bot.send_chat_action(message.chat.id, "typing")
 
     try:
-        response = await _get_llm_response_with_rate_limit_handling(
+        response = await _get_chat_response_with_rate_limit_handling(
             message,
-            llm_client,
+            chat_service,
             user_id,
             "Обнови мой часовой пояс из настроек Google Calendar и сохрани его.",
             token_storage,
@@ -107,19 +105,18 @@ async def cmd_timezone(
 @router.message(Command("tasks"))
 async def handle_tasks_command(
     message: Message,
-    llm_client: LLMClient,
+    chat_service: ChatService,
     token_storage: TokenStorage,
 ) -> None:
-    """Handle /tasks command - show today's tasks via LLM/MCP."""
     user_id = message.from_user.id if message.from_user else 0
 
     if message.bot:
         await message.bot.send_chat_action(message.chat.id, "typing")
 
     try:
-        response = await _get_llm_response_with_rate_limit_handling(
+        response = await _get_chat_response_with_rate_limit_handling(
             message,
-            llm_client,
+            chat_service,
             user_id,
             "Покажи мои задачи на сегодня.",
             token_storage,
@@ -133,10 +130,9 @@ async def handle_tasks_command(
 @router.callback_query(F.data == "tasks_today")
 async def handle_tasks_today_callback(
     callback: CallbackQuery,
-    llm_client: LLMClient,
+    chat_service: ChatService,
     token_storage: TokenStorage,
 ) -> None:
-    """Handle tasks_today button click - fetch via LLM/MCP."""
     await callback.answer()
     user_id = callback.from_user.id
     message = callback.message
@@ -145,9 +141,9 @@ async def handle_tasks_today_callback(
         await message.bot.send_chat_action(message.chat.id, "typing")
 
     try:
-        response = await _get_llm_response_with_rate_limit_handling(
+        response = await _get_chat_response_with_rate_limit_handling(
             message,
-            llm_client,
+            chat_service,
             user_id,
             "Покажи мои задачи на сегодня.",
             token_storage,
@@ -161,10 +157,9 @@ async def handle_tasks_today_callback(
 @router.callback_query(F.data == "events_today")
 async def handle_events_today_callback(
     callback: CallbackQuery,
-    llm_client: LLMClient,
+    chat_service: ChatService,
     token_storage: TokenStorage,
 ) -> None:
-    """Handle events_today button click - fetch via LLM/MCP."""
     await callback.answer()
     user_id = callback.from_user.id
     message = callback.message
@@ -173,9 +168,9 @@ async def handle_events_today_callback(
         await message.bot.send_chat_action(message.chat.id, "typing")
 
     try:
-        response = await _get_llm_response_with_rate_limit_handling(
+        response = await _get_chat_response_with_rate_limit_handling(
             message,
-            llm_client,
+            chat_service,
             user_id,
             "Покажи мои события на сегодня.",
             token_storage,
@@ -187,17 +182,9 @@ async def handle_events_today_callback(
 
 
 @router.message(Command("auth"))
-async def handle_auth(message: Message, token_storage: TokenStorage) -> None:
-    """Handle /auth command - initiate Google OAuth2."""
-    from core.config import get_settings
-    from core.google.auth import GoogleAuthService
-
-    settings = get_settings()
-    auth_service = GoogleAuthService(settings, token_storage)
-
+async def handle_auth(message: Message, auth_service: AuthService) -> None:
     user_id = message.from_user.id if message.from_user else 0
 
-    # Check if already authorized
     if await auth_service.is_authorized(user_id):
         await message.answer(
             "✅ Вы уже авторизованы в Google!\n\n"
@@ -235,10 +222,9 @@ async def handle_auth(message: Message, token_storage: TokenStorage) -> None:
 
 
 @router.message(Command("clear"))
-async def handle_clear(message: Message, llm_client: LLMClient) -> None:
-    """Handle /clear command - clear conversation history."""
+async def handle_clear(message: Message, chat_service: ChatService) -> None:
     user_id = message.from_user.id if message.from_user else 0
-    await llm_client.clear_history(user_id)
+    await chat_service.clear_history(user_id)
 
     await message.answer("🗑 История диалога очищена.")
 
@@ -246,23 +232,21 @@ async def handle_clear(message: Message, llm_client: LLMClient) -> None:
 @router.message(F.text)
 async def handle_text_message(
     message: Message,
-    llm_client: LLMClient,
+    chat_service: ChatService,
     token_storage: TokenStorage,
 ) -> None:
-    """Handle all text messages - route to LLM."""
     if not message.text:
         return
 
     user_id = message.from_user.id if message.from_user else 0
     text = message.text
 
-    # Show typing indicator
     if message.bot:
         await message.bot.send_chat_action(message.chat.id, "typing")
 
     try:
-        response = await _get_llm_response_with_rate_limit_handling(
-            message, llm_client, user_id, text, token_storage
+        response = await _get_chat_response_with_rate_limit_handling(
+            message, chat_service, user_id, text, token_storage
         )
         await _send_response(message, response)
     except Exception as e:
@@ -275,12 +259,10 @@ async def handle_text_message(
 
 async def _send_response(message: Message, response: str | dict) -> None:
     """Send response to user, handling special cases."""
-    # Handle auth_required - send constant message without adding to history
     if isinstance(response, dict) and response.get("type") == "auth_required":
         await message.answer(response.get("message", ""))
         return
 
-    # Send response as plain text
     if isinstance(response, str):
         if len(response) > 4096:
             for i in range(0, len(response), 4096):
@@ -289,15 +271,15 @@ async def _send_response(message: Message, response: str | dict) -> None:
             await message.answer(response)
 
 
-async def _get_llm_response_with_rate_limit_handling(
+async def _get_chat_response_with_rate_limit_handling(
     message: Message,
-    llm_client: LLMClient,
+    chat_service: ChatService,
     user_id: int,
     text: str,
     token_storage: TokenStorage | None = None,
     max_retries: int = 3,
 ) -> str:
-    """Get LLM response with rate limit handling."""
+    """Get chat response with rate limit handling."""
     user_timezone = None
     if token_storage:
         try:
@@ -307,14 +289,13 @@ async def _get_llm_response_with_rate_limit_handling(
 
     for attempt in range(max_retries):
         try:
-            return await llm_client.chat(user_id, text, user_timezone=user_timezone)
+            return await chat_service.process_message(user_id, text, user_timezone=user_timezone)
         except RateLimitException as e:
             if attempt < max_retries - 1:
                 await message.answer(
                     f"⏳ Превышен лимит запросов. Подождите {int(e.retry_after)} секунд..."
                 )
                 await asyncio.sleep(e.retry_after)
-                # Show typing again
                 if message.bot:
                     await message.bot.send_chat_action(message.chat.id, "typing")
             else:
@@ -326,12 +307,10 @@ async def _get_llm_response_with_rate_limit_handling(
 @router.message(F.voice)
 async def handle_voice_message(
     message: Message,
-    llm_client: LLMClient,
+    chat_service: ChatService,
     token_storage: TokenStorage,
 ) -> None:
-    """Handle voice messages - transcribe and send to LLM."""
     from core.config import get_settings
-    from core.llm.transcription import TranscriptionService
 
     user_id = message.from_user.id if message.from_user else 0
     voice = message.voice
@@ -374,8 +353,8 @@ async def handle_voice_message(
 
         await message.bot.send_chat_action(message.chat.id, "typing")
 
-        response = await _get_llm_response_with_rate_limit_handling(
-            message, llm_client, user_id, transcribed_text, token_storage
+        response = await _get_chat_response_with_rate_limit_handling(
+            message, chat_service, user_id, transcribed_text, token_storage
         )
         await _send_response(message, response)
 
