@@ -49,7 +49,17 @@ async def telethon_auth_start(user_id: int, phone: str) -> str:
     """Start Telethon authentication by sending code to phone number. Phone format: +79001234567."""
     redis = await get_redis()
     token_storage = TokenStorage(redis, settings.token_ttl_seconds)
-    session_string = await token_storage.get_telethon_session(user_id)
+
+    # Reuse session from previous auth attempt if exists (Telegram may return
+    # the same phone_code_hash bound to the previous auth_key)
+    session_string = None
+    prev_auth = await redis.get(f"telethon_auth:{user_id}")
+    if prev_auth:
+        prev_info = json.loads(prev_auth)
+        session_string = prev_info.get("session_string")
+    if not session_string:
+        session_string = await token_storage.get_telethon_session(user_id)
+
     service = TelethonService(settings, session_string)
 
     if not service.is_configured:
