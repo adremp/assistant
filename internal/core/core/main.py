@@ -16,9 +16,11 @@ from core.repository.llm_repo import LLMRepository
 from core.repository.mcp_repo import MCPRepository
 from core.services.auth_service import AuthService
 from core.services.chat_service import ChatService
+from core.services.summary_service import SummaryService
 from core.services.tool_registry import ToolRegistry
 from core.services.watcher_service import WatcherService
 from core.telegram.bot import create_bot, create_dispatcher
+from pkg.summary_group_storage import SummaryGroupStorage
 
 logging.basicConfig(
     level=logging.INFO,
@@ -71,6 +73,9 @@ async def lifespan(app: FastAPI):
 
     watcher_service = WatcherService(bot, mcp_repo, settings, redis)
 
+    summary_group_storage = SummaryGroupStorage(redis)
+    summary_service = SummaryService(summary_group_storage, mcp_repo, bot, settings)
+
     # Workflow data for aiogram DI
     workflow_data = {
         "redis": redis,
@@ -80,6 +85,7 @@ async def lifespan(app: FastAPI):
         "auth_service": auth_service,
         "tool_registry": tool_registry,
         "mcp_repo": mcp_repo,
+        "summary_service": summary_service,
     }
 
     # Store in app state
@@ -95,10 +101,20 @@ async def lifespan(app: FastAPI):
     scheduler_task = asyncio.create_task(watcher_service.start())
     logger.info("Watcher service started")
 
+    # Start summary scheduler
+    summary_task = asyncio.create_task(summary_service.start())
+    logger.info("Summary service started")
+
     yield
 
     # Cleanup
     logger.info("Shutting down...")
+    summary_task.cancel()
+    try:
+        await summary_task
+    except asyncio.CancelledError:
+        pass
+
     scheduler_task.cancel()
     try:
         await scheduler_task

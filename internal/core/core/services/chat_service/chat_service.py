@@ -27,8 +27,6 @@ Capabilities:
 - Update tasks
 - Mark tasks as completed
 - Authenticate Telethon (MTProto) for Telegram channel access
-- Create and manage summary groups for Telegram channels
-- Generate AI-powered summaries from channel messages
 - Create watchers for automatic Telegram chat monitoring by prompt
 - List and delete watchers
 

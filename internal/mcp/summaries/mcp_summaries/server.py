@@ -9,7 +9,6 @@ from pkg.token_storage import TokenStorage
 from redis.asyncio import Redis
 
 from mcp_summaries.config import get_settings
-from mcp_summaries.storage.summary_groups import SummaryGroupStorage
 from mcp_summaries.storage.watchers import WatcherStorage
 from mcp_summaries.summary_generator import SummaryGenerator
 from mcp_summaries.telethon_service import TelethonService
@@ -131,69 +130,65 @@ async def get_channels(user_id: int) -> str:
 
 
 @mcp.tool()
-async def create_summary_group(
-    user_id: int, name: str, prompt: str, channel_ids: list[str]
+async def generate_summary(
+    user_id: int,
+    channel_ids: list[str],
+    prompt: str,
+    last_message_ids: dict[str, int] | None = None,
 ) -> str:
-    """Create a new summary group for monitoring channels."""
-    redis = await get_redis()
-    storage = SummaryGroupStorage(redis)
-    group_id = await storage.create_group(user_id, name, prompt, channel_ids)
-    return _ok({"group_id": group_id, "message": f"Summary group '{name}' created."})
-
-
-@mcp.tool()
-async def list_summary_groups(user_id: int) -> str:
-    """List user's summary groups."""
-    redis = await get_redis()
-    storage = SummaryGroupStorage(redis)
-    groups = await storage.get_user_groups(user_id)
-    return _ok({"groups": groups, "count": len(groups)})
-
-
-@mcp.tool()
-async def delete_summary_group(user_id: int, group_id: str) -> str:
-    """Delete a summary group."""
-    redis = await get_redis()
-    storage = SummaryGroupStorage(redis)
-    deleted = await storage.delete_group(group_id)
-    if deleted:
-        return _ok({"message": "Summary group deleted."})
-    return _err("Group not found.")
-
-
-@mcp.tool()
-async def generate_summary(user_id: int, group_id: str) -> str:
-    """Generate a summary for a summary group's channels. Fetches messages and creates AI summary."""
+    """Generate a summary for given channels. If last_message_ids provided, fetches only new messages (incremental)."""
     redis = await get_redis()
     token_storage = TokenStorage(redis, settings.token_ttl_seconds)
-    storage = SummaryGroupStorage(redis)
-
-    group = await storage.get_group(group_id)
-    if not group:
-        return _err("Group not found.")
 
     session_string = await token_storage.get_telethon_session(user_id)
     if not session_string:
         return _err("Telethon not authenticated.")
 
+    last_message_ids = last_message_ids or {}
     service = TelethonService(settings, session_string)
     try:
         channels_data = []
-        for channel_id in group.get("channel_ids", []):
-            info = await service.get_channel_info(channel_id)
-            name = info.get("title", channel_id) if info else channel_id
-            text = await service.get_channel_messages_formatted(channel_id, limit=500)
-            if text:
-                channels_data.append({"channel_name": name, "messages_text": text})
+        new_last_ids = dict(last_message_ids)
+
+        for channel_id in channel_ids:
+            cid = str(channel_id)
+            info = await service.get_channel_info(cid)
+            name = info.get("title", cid) if info else cid
+
+            min_id = last_message_ids.get(cid, 0)
+            if min_id > 0:
+                messages = await service.get_messages_since(cid, min_id=min_id)
+                if messages:
+                    new_last_ids[cid] = max(m["id"] for m in messages)
+                    lines = []
+                    for m in messages:
+                        sender = m.get("sender", "?")
+                        text = m.get("text", "").replace("\n", " ")
+                        lines.append(f"{sender}: {text}")
+                    text_block = "\n".join(lines)
+                    channels_data.append({"channel_name": name, "messages_text": text_block})
+            else:
+                text_block = await service.get_channel_messages_formatted(cid, limit=500)
+                if text_block:
+                    channels_data.append({"channel_name": name, "messages_text": text_block})
+                latest = await service.get_messages_since(cid, min_id=0, limit=1)
+                if latest:
+                    new_last_ids[cid] = max(m["id"] for m in latest)
 
         if not channels_data:
-            return _err("No messages found in any channel.")
+            return _ok({
+                "summary": "",
+                "channels_processed": 0,
+                "last_message_ids": new_last_ids,
+            })
 
         generator = SummaryGenerator(settings)
-        summary = await generator.generate_multi_channel_summary(
-            channels_data, group.get("prompt", "")
-        )
-        return _ok({"summary": summary, "channels_processed": len(channels_data)})
+        summary = await generator.generate_multi_channel_summary(channels_data, prompt)
+        return _ok({
+            "summary": summary,
+            "channels_processed": len(channels_data),
+            "last_message_ids": new_last_ids,
+        })
     except Exception as e:
         return _err(f"Summary generation failed: {e}")
     finally:

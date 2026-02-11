@@ -21,9 +21,11 @@ async def create_bot(settings: Settings) -> Bot:
 def create_dispatcher() -> Dispatcher:
     """Create and configure dispatcher with routers."""
     from core.handlers.telegram_handler import router
+    from core.handlers.telegram_handler.summary_handler import summary_router
     from core.telegram.middleware import LoggingMiddleware
 
     dp = Dispatcher()
+    dp.include_router(summary_router)
     dp.include_router(router)
 
     dp.message.middleware(LoggingMiddleware())
