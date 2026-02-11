@@ -56,7 +56,8 @@ IMPORTANT - TIMEZONE:
 IMPORTANT - TELETHON AUTHENTICATION:
 - If user wants to use Telegram summaries, they need to authorize with telethon_auth_start(phone)
 - Phone must be in international format: +79001234567
-- After code is sent, use telethon_auth_submit_code(code) to complete
+- After code is sent, WARN the user: send the code with dashes or spaces (e.g. 1-2-3-4-5) to avoid Telegram blocking the login for "sharing the code"
+- When receiving code from user, strip all non-digit characters before passing to telethon_auth_submit_code(code)
 
 IMPORTANT - COMPLETED TASKS:
 - If user mentions completing a task that doesn't exist in their task list, create it with today's date and immediately mark it as completed

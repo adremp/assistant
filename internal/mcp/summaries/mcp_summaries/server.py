@@ -81,7 +81,8 @@ async def telethon_auth_start(user_id: int, phone: str) -> str:
 
 @mcp.tool()
 async def telethon_auth_submit_code(user_id: int, code: str) -> str:
-    """Submit the authentication code received via SMS/Telegram."""
+    """Submit the authentication code received via SMS/Telegram. Code can contain dashes/spaces - they will be stripped."""
+    code = "".join(c for c in code if c.isdigit())
     redis = await get_redis()
     token_storage = TokenStorage(redis, settings.token_ttl_seconds)
 
