@@ -11,6 +11,12 @@ services:
       - GOOGLE_REDIRECT_URI=${GOOGLE_REDIRECT_URI}
     volumes:
       - ../../../credentials.json:/app/credentials.json:ro
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/mcp')"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
     depends_on:
       assistant-redis:
         condition: service_healthy

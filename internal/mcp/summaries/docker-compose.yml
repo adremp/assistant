@@ -15,6 +15,12 @@ services:
       - LLM_TEMPERATURE=${LLM_TEMPERATURE:-0.7}
       - LLM_TIMEOUT=${LLM_TIMEOUT:-30.0}
       - LLM_TPM_LIMIT=${LLM_TPM_LIMIT:-100000}
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/mcp')"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
     depends_on:
       assistant-redis:
         condition: service_healthy

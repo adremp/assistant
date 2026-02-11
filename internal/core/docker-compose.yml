@@ -29,8 +29,8 @@ services:
       assistant-redis:
         condition: service_healthy
       mcp-google:
-        condition: service_started
+        condition: service_healthy
       mcp-summaries:
-        condition: service_started
+        condition: service_healthy
     networks:
       - bot-network
