@@ -57,6 +57,8 @@ async def telethon_auth_start(user_id: int, phone: str) -> str:
 
     try:
         phone_code_hash = await service.send_code(phone)
+        # Save session after send_code so sign_in can reuse it
+        await token_storage.set_telethon_session(user_id, service.get_session_string())
         # Store auth state in Redis temporarily
         await redis.setex(
             f"telethon_auth:{user_id}",
