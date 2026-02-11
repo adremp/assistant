@@ -134,29 +134,72 @@ class WatcherScheduler:
     async def _filter_messages_with_llm(
         self, messages: list[dict], prompt: str
     ) -> list[dict]:
-        """Filter messages using LLM based on the watcher prompt."""
+        """Filter messages using LLM based on the watcher prompt.
+        Splits into batches to stay within TPM limits."""
         if not messages:
             return []
 
-        # Build numbered message list
-        lines = []
-        for i, msg in enumerate(messages, 1):
+        # Build lines for each message
+        msg_lines = []
+        for msg in messages:
             chat_title = msg.get("chat_title", "?")
             sender = msg.get("sender", "?")
             text = msg.get("text", "").replace("\n", " ")
             date = msg.get("date", "")
-            lines.append(f"{i}. [{chat_title}] {sender}: {text} ({date})")
+            msg_lines.append(f"[{chat_title}] {sender}: {text} ({date})")
+
+        # Split into batches (~4 chars per token, keep under 5000 tokens per batch)
+        max_chars_per_batch = 16000
+        batches: list[list[int]] = []  # list of [original_index, ...]
+        current_batch: list[int] = []
+        current_chars = 0
+
+        for i, line in enumerate(msg_lines):
+            line_chars = len(line)
+            if current_chars + line_chars > max_chars_per_batch and current_batch:
+                batches.append(current_batch)
+                current_batch = []
+                current_chars = 0
+            current_batch.append(i)
+            current_chars += line_chars
+
+        if current_batch:
+            batches.append(current_batch)
+
+        logger.info(f"Filtering {len(messages)} messages in {len(batches)} batches")
+
+        client = AsyncOpenAI(
+            api_key=self.settings.llm_api_key,
+            base_url=self.settings.llm_base_url,
+            timeout=self.settings.llm_timeout,
+        )
+
+        filtered = []
+        for batch_indices in batches:
+            batch_result = await self._filter_batch(
+                client, messages, msg_lines, batch_indices, prompt
+            )
+            filtered.extend(batch_result)
+
+        return filtered
+
+    async def _filter_batch(
+        self,
+        client: AsyncOpenAI,
+        messages: list[dict],
+        msg_lines: list[str],
+        batch_indices: list[int],
+        prompt: str,
+    ) -> list[dict]:
+        """Filter a single batch of messages through LLM."""
+        lines = []
+        for num, idx in enumerate(batch_indices, 1):
+            lines.append(f"{num}. {msg_lines[idx]}")
 
         user_content = f"Критерий: {prompt}\n\nСообщения:\n" + "\n".join(lines)
         user_content += "\n\nОтветь ТОЛЬКО JSON-массивом номеров: [1, 3, 5]"
 
         try:
-            client = AsyncOpenAI(
-                api_key=self.settings.llm_api_key,
-                base_url=self.settings.llm_base_url,
-                timeout=self.settings.llm_timeout,
-            )
-
             response = await client.chat.completions.create(
                 model=self.settings.llm_model,
                 messages=[
@@ -167,10 +210,8 @@ class WatcherScheduler:
             )
 
             content = response.choices[0].message.content or "[]"
-            # Extract JSON array from response
             content = content.strip()
             if not content.startswith("["):
-                # Try to find JSON array in the response
                 start = content.find("[")
                 end = content.rfind("]")
                 if start != -1 and end != -1:
@@ -182,16 +223,17 @@ class WatcherScheduler:
             if not isinstance(indices, list):
                 return []
 
-            # Map 1-based indices back to messages
+            # Map 1-based batch numbers back to original messages
             filtered = []
-            for idx in indices:
-                if isinstance(idx, int) and 1 <= idx <= len(messages):
-                    filtered.append(messages[idx - 1])
+            for num in indices:
+                if isinstance(num, int) and 1 <= num <= len(batch_indices):
+                    original_idx = batch_indices[num - 1]
+                    filtered.append(messages[original_idx])
 
             return filtered
 
         except Exception as e:
-            logger.error(f"LLM filter error: {e}", exc_info=True)
+            logger.error(f"LLM filter batch error: {e}", exc_info=True)
             return []
 
     async def _send_results(
