@@ -193,11 +193,13 @@ class SummaryGenerator:
             )
 
         # Multi-chunk - summarize each, then merge
-        logger.info(f"Multi-chunk summarization: {len(chunks)} chunks for {channel_name}")
+        logger.info(
+            f"Multi-chunk summarization: {len(chunks)} chunks for {channel_name}"
+        )
 
         partial_summaries = []
         for i, chunk in enumerate(chunks):
-            logger.info(f"Summarizing chunk {i+1}/{len(chunks)}")
+            logger.info(f"Summarizing chunk {i + 1}/{len(chunks)}")
             summary = await self._summarize_chunk(
                 chunk, prompt, channel_name, is_partial=True
             )
@@ -238,9 +240,7 @@ class SummaryGenerator:
                 channel_summaries.append(f"**{channel_name}**: Нет сообщений")
                 continue
 
-            summary = await self.generate_summary(
-                messages_text, prompt, channel_name
-            )
+            summary = await self.generate_summary(messages_text, prompt, channel_name)
             channel_summaries.append(f"**{channel_name}**:\n{summary}")
 
         # Combine all channel summaries

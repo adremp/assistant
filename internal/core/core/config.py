@@ -42,6 +42,9 @@ class Settings(BaseSettings):
     mcp_google_url: str = "http://mcp-google:8000/mcp"
     mcp_summaries_url: str = "http://mcp-summaries:8000/mcp"
 
+    # Watcher scheduler
+    watcher_check_interval_seconds: int = 60
+
 
 @lru_cache
 def get_settings() -> Settings:

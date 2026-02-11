@@ -1,11 +1,10 @@
 """Telethon client for accessing Telegram channel history."""
 
 import logging
-from typing import AsyncGenerator
 
 from telethon import TelegramClient
 from telethon.sessions import StringSession
-from telethon.tl.types import Message, Channel, Chat
+from telethon.tl.types import Channel, Chat, Message
 
 from mcp_summaries.config import Settings
 
@@ -30,10 +29,7 @@ class TelethonService:
     @property
     def is_configured(self) -> bool:
         """Check if Telethon is configured with API credentials."""
-        return bool(
-            self.settings.telethon_api_id and
-            self.settings.telethon_api_hash
-        )
+        return bool(self.settings.telethon_api_id and self.settings.telethon_api_hash)
 
     def get_session_string(self) -> str:
         """Get current session string (for saving to user storage)."""
@@ -131,12 +127,16 @@ class TelethonService:
                 entity = dialog.entity
                 if isinstance(entity, (Channel, Chat)):
                     # Only include channels/supergroups, not regular chats
-                    if isinstance(entity, Channel) or (hasattr(entity, 'megagroup') and entity.megagroup):
-                        channels.append({
-                            "id": entity.id,
-                            "title": getattr(entity, "title", "Unknown"),
-                            "username": getattr(entity, "username", None),
-                        })
+                    if isinstance(entity, Channel) or (
+                        hasattr(entity, "megagroup") and entity.megagroup
+                    ):
+                        channels.append(
+                            {
+                                "id": entity.id,
+                                "title": getattr(entity, "title", "Unknown"),
+                                "username": getattr(entity, "username", None),
+                            }
+                        )
             logger.info(f"Found {len(channels)} channels for user")
             return channels
         except Exception as e:
@@ -201,14 +201,16 @@ class TelethonService:
                         sender_name = getattr(
                             message.sender,
                             "first_name",
-                            getattr(message.sender, "title", "Unknown")
+                            getattr(message.sender, "title", "Unknown"),
                         )
 
-                    messages.append({
-                        "sender": sender_name,
-                        "text": message.text,
-                        "date": message.date.isoformat() if message.date else None,
-                    })
+                    messages.append(
+                        {
+                            "sender": sender_name,
+                            "text": message.text,
+                            "date": message.date.isoformat() if message.date else None,
+                        }
+                    )
 
             # Reverse to get chronological order
             messages.reverse()
@@ -245,6 +247,100 @@ class TelethonService:
             lines.append(f"{sender}: {text}")
 
         return "\n".join(lines)
+
+    async def get_user_chats(self) -> list[dict]:
+        """
+        Get all channels and groups the user is part of.
+
+        Returns:
+            List of chat dicts with id, title, username, type
+        """
+        client = await self.get_client()
+        if client is None or not await self.is_authorized():
+            return []
+
+        try:
+            chats = []
+            async for dialog in client.iter_dialogs():
+                entity = dialog.entity
+                if isinstance(entity, Channel):
+                    chat_type = "group" if getattr(entity, "megagroup", False) else "channel"
+                    chats.append(
+                        {
+                            "id": entity.id,
+                            "title": getattr(entity, "title", "Unknown"),
+                            "username": getattr(entity, "username", None),
+                            "type": chat_type,
+                        }
+                    )
+                elif isinstance(entity, Chat):
+                    chats.append(
+                        {
+                            "id": entity.id,
+                            "title": getattr(entity, "title", "Unknown"),
+                            "username": None,
+                            "type": "group",
+                        }
+                    )
+            logger.info(f"Found {len(chats)} chats for user")
+            return chats
+        except Exception as e:
+            logger.error(f"Failed to get user chats: {e}")
+            return []
+
+    async def get_messages_since(
+        self,
+        chat_id: str,
+        min_id: int = 0,
+        limit: int = 500,
+    ) -> list[dict]:
+        """
+        Get messages from a chat with ID > min_id.
+
+        Args:
+            chat_id: Channel/group username or ID
+            min_id: Minimum message ID (fetch messages after this)
+            limit: Maximum number of messages to fetch
+
+        Returns:
+            List of message dicts with id, sender, text, date, chat_title
+        """
+        client = await self.get_client()
+        if client is None or not await self.is_authorized():
+            return []
+
+        try:
+            entity = await client.get_entity(chat_id)
+            chat_title = getattr(entity, "title", str(chat_id))
+            messages = []
+
+            async for message in client.iter_messages(entity, limit=limit, min_id=min_id):
+                if isinstance(message, Message) and message.text:
+                    sender_name = "Unknown"
+                    if message.sender:
+                        sender_name = getattr(
+                            message.sender,
+                            "first_name",
+                            getattr(message.sender, "title", "Unknown"),
+                        )
+
+                    messages.append(
+                        {
+                            "id": message.id,
+                            "sender": sender_name,
+                            "text": message.text,
+                            "date": message.date.isoformat() if message.date else None,
+                            "chat_title": chat_title,
+                        }
+                    )
+
+            messages.reverse()
+            logger.info(f"Fetched {len(messages)} new messages from {chat_id} (min_id={min_id})")
+            return messages
+
+        except Exception as e:
+            logger.error(f"Failed to get messages since {min_id} from {chat_id}: {e}")
+            return []
 
     async def disconnect(self) -> None:
         """Disconnect Telethon client."""

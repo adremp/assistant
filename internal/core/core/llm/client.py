@@ -36,6 +36,8 @@ Capabilities:
 - Authenticate Telethon (MTProto) for Telegram channel access
 - Create and manage summary groups for Telegram channels
 - Generate AI-powered summaries from channel messages
+- Create watchers for automatic Telegram chat monitoring by prompt
+- List and delete watchers
 
 IMPORTANT - RESPONSE RULES:
 1. ALWAYS use the respond_to_user tool to reply to the user

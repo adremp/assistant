@@ -83,10 +83,23 @@ async def lifespan(app: FastAPI):
     polling_task = asyncio.create_task(dp.start_polling(bot, **workflow_data))
     logger.info("Telegram polling started")
 
+    # Start watcher scheduler
+    from core.scheduler.watcher_scheduler import WatcherScheduler
+
+    scheduler = WatcherScheduler(bot, mcp_manager, settings, redis)
+    scheduler_task = asyncio.create_task(scheduler.start())
+    logger.info("Watcher scheduler started")
+
     yield
 
     # Cleanup
     logger.info("Shutting down...")
+    scheduler_task.cancel()
+    try:
+        await scheduler_task
+    except asyncio.CancelledError:
+        pass
+
     polling_task.cancel()
     try:
         await polling_task
