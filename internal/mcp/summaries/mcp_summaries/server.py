@@ -277,9 +277,13 @@ async def fetch_new_chat_messages(
 
         for chat_id in chat_ids:
             min_id = last_message_ids.get(str(chat_id), 0)
-            # Limit to 100 messages on first check (min_id=0) to avoid overload
-            limit = 100 if min_id == 0 else 500
-            messages = await service.get_messages_since(str(chat_id), min_id=min_id, limit=limit)
+            if min_id == 0:
+                # First check: just record the latest message ID, don't process old messages
+                latest = await service.get_messages_since(str(chat_id), min_id=0, limit=1)
+                if latest:
+                    new_last_ids[str(chat_id)] = max(m["id"] for m in latest)
+                continue
+            messages = await service.get_messages_since(str(chat_id), min_id=min_id)
             if messages:
                 all_messages.extend(messages)
                 max_id = max(m["id"] for m in messages)
