@@ -57,13 +57,16 @@ async def telethon_auth_start(user_id: int, phone: str) -> str:
 
     try:
         phone_code_hash = await service.send_code(phone)
-        # Save session after send_code so sign_in can reuse it
-        await token_storage.set_telethon_session(user_id, service.get_session_string())
-        # Store auth state in Redis temporarily
+        # Store auth state + session in temp key (not main token_storage,
+        # so other tools like get_channels don't use this incomplete session)
         await redis.setex(
             f"telethon_auth:{user_id}",
             300,
-            json.dumps({"phone": phone, "phone_code_hash": phone_code_hash}),
+            json.dumps({
+                "phone": phone,
+                "phone_code_hash": phone_code_hash,
+                "session_string": service.get_session_string(),
+            }),
         )
         return _ok(
             {
@@ -87,7 +90,8 @@ async def telethon_auth_submit_code(user_id: int, code: str) -> str:
         return _err("No pending auth. Start again with telethon_auth_start.")
 
     auth_info = json.loads(auth_data)
-    session_string = await token_storage.get_telethon_session(user_id)
+    # Use session from send_code (stored in temp key, not main token_storage)
+    session_string = auth_info.get("session_string")
     service = TelethonService(settings, session_string)
 
     try:
