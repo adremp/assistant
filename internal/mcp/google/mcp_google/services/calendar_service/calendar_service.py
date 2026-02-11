@@ -14,9 +14,6 @@ logger = logging.getLogger(__name__)
 class CalendarService:
     """Client for Google Calendar API."""
 
-    def __init__(self):
-        pass
-
     def _get_service(self, credentials: Credentials):
         return build("calendar", "v3", credentials=credentials)
 
@@ -57,8 +54,10 @@ class CalendarService:
                 {
                     "id": event.get("id"),
                     "summary": event.get("summary", "Без названия"),
-                    "start": event.get("start", {}).get("dateTime") or event.get("start", {}).get("date"),
-                    "end": event.get("end", {}).get("dateTime") or event.get("end", {}).get("date"),
+                    "start": event.get("start", {}).get("dateTime")
+                    or event.get("start", {}).get("date"),
+                    "end": event.get("end", {}).get("dateTime")
+                    or event.get("end", {}).get("date"),
                     "description": event.get("description"),
                     "location": event.get("location"),
                     "recurrence": event.get("recurrence"),
@@ -103,7 +102,11 @@ class CalendarService:
             event_body["recurrence"] = recurrence
 
         try:
-            event = service.events().insert(calendarId=calendar_id, body=event_body).execute()
+            event = (
+                service.events()
+                .insert(calendarId=calendar_id, body=event_body)
+                .execute()
+            )
             return {
                 "id": event.get("id"),
                 "summary": event.get("summary"),
@@ -131,7 +134,9 @@ class CalendarService:
     ) -> dict[str, Any]:
         service = self._get_service(credentials)
         try:
-            event = service.events().get(calendarId=calendar_id, eventId=event_id).execute()
+            event = (
+                service.events().get(calendarId=calendar_id, eventId=event_id).execute()
+            )
             if summary:
                 event["summary"] = summary
             if start_time:
@@ -145,7 +150,11 @@ class CalendarService:
             if recurrence is not None:
                 event["recurrence"] = recurrence
 
-            updated = service.events().update(calendarId=calendar_id, eventId=event_id, body=event).execute()
+            updated = (
+                service.events()
+                .update(calendarId=calendar_id, eventId=event_id, body=event)
+                .execute()
+            )
             return {
                 "id": updated.get("id"),
                 "summary": updated.get("summary"),

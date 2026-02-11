@@ -4,8 +4,8 @@ import json
 import logging
 from pathlib import Path
 
-from google.oauth2.credentials import Credentials
 from google.auth.transport.requests import Request
+from google.oauth2.credentials import Credentials
 
 from pkg.token_storage import TokenStorage
 
@@ -19,7 +19,7 @@ SCOPES = [
 ]
 
 
-class GoogleAuthReader:
+class AuthRepo:
     """Read-only Google credentials from shared Redis."""
 
     def __init__(self, token_storage: TokenStorage, credentials_path: Path):
@@ -30,7 +30,9 @@ class GoogleAuthReader:
     def _load_client_config(self) -> dict:
         if self._client_config is None:
             if not self.credentials_path.exists():
-                raise FileNotFoundError(f"Google credentials file not found: {self.credentials_path}")
+                raise FileNotFoundError(
+                    f"Google credentials file not found: {self.credentials_path}"
+                )
             with open(self.credentials_path) as f:
                 config = json.load(f)
             if "web" in config:

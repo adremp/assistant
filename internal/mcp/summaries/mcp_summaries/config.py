@@ -21,7 +21,6 @@ class Settings(BaseSettings):
     mcp_port: int = 8002
 
 
-
 @lru_cache
 def get_settings() -> Settings:
     return Settings()
