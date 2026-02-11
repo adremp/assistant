@@ -16,7 +16,7 @@ services:
       - LLM_TIMEOUT=${LLM_TIMEOUT:-30.0}
       - LLM_TPM_LIMIT=${LLM_TPM_LIMIT:-100000}
     healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/mcp')"]
+      test: ["CMD", "python", "-c", "import socket; s=socket.create_connection(('localhost',8000),2); s.close()"]
       interval: 5s
       timeout: 5s
       retries: 5
