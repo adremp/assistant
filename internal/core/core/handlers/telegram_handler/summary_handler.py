@@ -335,10 +335,12 @@ async def cb_create_start(callback: CallbackQuery, state: FSMContext) -> None:
 
 
 @summary_router.message(SummaryGroupForm.waiting_for_name, F.text)
-async def fsm_name(message: Message, state: FSMContext) -> None:
+async def fsm_name(
+    message: Message, state: FSMContext, summary_service: SummaryService
+) -> None:
     await state.update_data(name=message.text)
     await state.set_state(SummaryGroupForm.selecting_chats)
-    await _show_chat_selection(message, state)
+    await _show_chat_selection(message, state, summary_service)
 
 
 async def _show_chat_selection(
